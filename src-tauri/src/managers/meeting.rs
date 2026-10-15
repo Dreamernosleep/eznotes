@@ -14,8 +14,8 @@ use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -31,6 +31,10 @@ use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
 use crate::audio_toolkit::{EarshotVad, SileroVad, VoiceActivityDetector};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
+use crate::managers::meeting_live::{
+    spawn_transcriber, MeetingChannel, Utterance, UtteranceCutter,
+};
+use crate::managers::meeting_process::spawn_processing;
 use crate::settings::get_settings;
 
 /// Folder under the app data dir that holds one sub-folder per meeting.
@@ -97,20 +101,25 @@ impl Activity {
     }
 }
 
-/// Writes one channel to raw 16-bit PCM and tracks whether it contains speech.
+/// Writes one channel to raw 16-bit PCM, tracks whether it contains speech,
+/// and hands finished utterances to the live transcriber.
 struct ChannelWriter {
     file: BufWriter<File>,
     vad: Option<Box<dyn VoiceActivityDetector>>,
     frame: Vec<f32>,
     activity: Arc<Activity>,
+    cutter: UtteranceCutter,
+    live: mpsc::Sender<Utterance>,
     failed: bool,
 }
 
 impl ChannelWriter {
     fn create(
         path: &Path,
+        channel: MeetingChannel,
         vad: Option<Box<dyn VoiceActivityDetector>>,
         activity: Arc<Activity>,
+        live: mpsc::Sender<Utterance>,
     ) -> Result<Self> {
         let frame_len = vad.as_ref().map_or(0, |v| v.frame_samples());
         Ok(Self {
@@ -118,6 +127,8 @@ impl ChannelWriter {
             vad,
             frame: Vec::with_capacity(frame_len),
             activity,
+            cutter: UtteranceCutter::new(channel),
+            live,
             failed: false,
         })
     }
@@ -144,8 +155,12 @@ impl ChannelWriter {
             self.frame.extend_from_slice(&rest[..take]);
             rest = &rest[take..];
             if self.frame.len() == frame_len {
-                if matches!(vad.is_voice(&self.frame), Ok(true)) {
+                let voiced = matches!(vad.is_voice(&self.frame), Ok(true));
+                if voiced {
                     self.activity.mark_speech();
+                }
+                if let Some(utterance) = self.cutter.push_frame(&self.frame, voiced) {
+                    let _ = self.live.send(utterance);
                 }
                 self.frame.clear();
             }
@@ -153,6 +168,9 @@ impl ChannelWriter {
     }
 
     fn finish(mut self) -> io::Result<()> {
+        if let Some(utterance) = self.cutter.flush() {
+            let _ = self.live.send(utterance);
+        }
         self.file.flush()
     }
 }
@@ -177,6 +195,8 @@ struct ActiveMeeting {
     loopback: Option<crate::audio_toolkit::audio::LoopbackCapture>,
     system: Arc<Mutex<Option<ChannelWriter>>>,
     watchdog_stop: Arc<AtomicBool>,
+    /// Live transcription; ends once both channel writers are finished.
+    live: JoinHandle<()>,
 }
 
 pub struct MeetingManager {
@@ -284,9 +304,17 @@ impl MeetingManager {
             last_speech: AtomicU64::new(0),
         });
 
+        let (live_tx, live_rx) = mpsc::channel();
+        let live = spawn_transcriber(self.app_handle.clone(), id, live_rx);
+
         let (device, channel) = self.audio.meeting_microphone();
-        let mic_writer =
-            ChannelWriter::create(&folder.join(MIC_PCM), self.create_vad(), activity.clone())?;
+        let mic_writer = ChannelWriter::create(
+            &folder.join(MIC_PCM),
+            MeetingChannel::Mic,
+            self.create_vad(),
+            activity.clone(),
+            live_tx.clone(),
+        )?;
         let mic = Recorder::open(RecorderConfig {
             device,
             channels: channel.map_or(Channels::MixToMono, Channels::Only),
@@ -298,8 +326,10 @@ impl MeetingManager {
 
         let system = Arc::new(Mutex::new(Some(ChannelWriter::create(
             &folder.join(SYSTEM_PCM),
+            MeetingChannel::System,
             self.create_vad(),
             activity.clone(),
+            live_tx,
         )?)));
 
         // Without system audio the meeting still records your side (e.g. an
@@ -330,6 +360,7 @@ impl MeetingManager {
             loopback,
             system,
             watchdog_stop: Arc::new(AtomicBool::new(false)),
+            live,
         })
     }
 
@@ -398,11 +429,15 @@ impl MeetingManager {
 
         let result = if duration < MIN_MEETING || !heard_speech {
             info!("Meeting {id} discarded (too short or no speech)");
-            self.discard(id, &folder)?;
-            Ok(None)
+            // Let queued live lines land before the row disappears.
+            let _ = meeting.live.join();
+            self.discard(id, &folder).map(|_| None)
         } else {
             self.finalize(id, &folder, meeting.started_at, duration)
-                .map(|_| Some(id))
+                .map(|_| {
+                    spawn_processing(self.app_handle.clone(), id, Some(meeting.live));
+                    Some(id)
+                })
         };
         self.notify();
         result

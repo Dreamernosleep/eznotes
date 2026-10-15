@@ -114,6 +114,8 @@ const WORD_MAX_MS: i64 = 2_000;
 /// A word starting this close to a turn (in a gap between turns) still
 /// belongs to it.
 const NEAR_TURN_MS: i64 = 500;
+/// A pause longer than this starts a new paragraph, even for the same speaker.
+const PARAGRAPH_GAP_MS: i64 = 1_500;
 
 /// Attribute each transcript item to a speaker, then merge consecutive items
 /// of the same speaker into one turn. Short items (words) take the speaker
@@ -133,7 +135,9 @@ pub fn label_segments(segments: &[TimedText], turns: &[SpeakerTurn]) -> Vec<Labe
             continue;
         }
         match out.last_mut() {
-            Some(last) if last.speaker == speaker => {
+            Some(last)
+                if last.speaker == speaker && segment.t0_ms - last.t1_ms <= PARAGRAPH_GAP_MS =>
+            {
                 last.t1_ms = last.t1_ms.max(segment.t1_ms);
                 // Punctuation tokens attach to the previous word.
                 if text.starts_with(|c: char| c.is_alphanumeric()) {
@@ -268,6 +272,14 @@ mod tests {
             (Some(2), "on mobile.")
         );
         assert_eq!((out[1].speaker, out[1].text.as_str()), (Some(1), "Good"));
+    }
+
+    #[test]
+    fn long_pause_starts_a_new_paragraph() {
+        let words = [seg(0, 500, "Hello."), seg(4_000, 4_500, "Anyway")];
+        let out = label_segments(&words, &[]);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|s| s.speaker.is_none()));
     }
 
     #[test]

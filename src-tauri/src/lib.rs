@@ -231,8 +231,13 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(meeting_manager.clone());
     app_handle.manage(tray::TrayState::new());
 
-    // Finish meetings a crash or forced quit left mid-recording.
-    std::thread::spawn(move || meeting_manager.recover_interrupted());
+    // Finish meetings a crash or forced quit left mid-recording, then resume
+    // any whose transcript wasn't finished.
+    let resume_app = app_handle.clone();
+    std::thread::spawn(move || {
+        meeting_manager.recover_interrupted();
+        managers::meeting_process::resume_pending(&resume_app);
+    });
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
