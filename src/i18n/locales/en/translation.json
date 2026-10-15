@@ -728,6 +728,15 @@
         "days_one": "{{count}} day",
         "days_other": "{{count}} days",
         "forever": "Forever"
+      },
+      "autoDetect": {
+        "label": "Detect Meetings",
+        "description": "Offer to record when Zoom, Teams, Google Meet, Webex, Slack or Discord starts using your microphone."
+      },
+      "ignoredApps": {
+        "title": "Never Offer For",
+        "description": "Apps you chose \"Never\" for. Remove one to be asked again.",
+        "remove": "Ask again for this app"
       }
     }
   },
@@ -809,5 +818,12 @@
     "learnMore": "How to fix",
     "recorderBlocked": "Can't record shortcuts right now — macOS Secure Input is blocking key events. Resolve the Secure Input warning first.",
     "dismiss": "Dismiss"
+  },
+  "meetingPrompt": {
+    "title": "Record this {{app}} meeting?",
+    "hint": "Your voice and the other people, transcribed on this PC.",
+    "record": "Record",
+    "notNow": "Not now",
+    "never": "Never for {{app}}"
   }
 }

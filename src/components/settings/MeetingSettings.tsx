@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
 import { Dropdown } from "../ui/Dropdown";
 import { SettingContainer } from "../ui/SettingContainer";
+import { ToggleSwitch } from "../ui/ToggleSwitch";
+import { X } from "lucide-react";
 import { ShortcutInput } from "./ShortcutInput";
 
 interface MeetingSettingProps {
@@ -79,8 +81,73 @@ export const MeetingAudioRetention: React.FC<MeetingSettingProps> = ({
   );
 };
 
+export const MeetingAutoDetect: React.FC<MeetingSettingProps> = ({
+  descriptionMode = "tooltip",
+  grouped = false,
+}) => {
+  const { t } = useTranslation();
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+  return (
+    <ToggleSwitch
+      checked={getSetting("meeting_auto_detect") ?? true}
+      onChange={(enabled) => updateSetting("meeting_auto_detect", enabled)}
+      isUpdating={isUpdating("meeting_auto_detect")}
+      label={t("settings.meetings.autoDetect.label")}
+      description={t("settings.meetings.autoDetect.description")}
+      descriptionMode={descriptionMode}
+      grouped={grouped}
+      tooltipPosition="bottom"
+    />
+  );
+};
+
+/** Apps the user chose "Never" for; each can be removed again. */
+export const MeetingIgnoredApps: React.FC<MeetingSettingProps> = ({
+  descriptionMode = "tooltip",
+  grouped = false,
+}) => {
+  const { t } = useTranslation();
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+  const apps = getSetting("meeting_ignored_apps") ?? [];
+  if (apps.length === 0) return null;
+  return (
+    <SettingContainer
+      title={t("settings.meetings.ignoredApps.title")}
+      description={t("settings.meetings.ignoredApps.description")}
+      descriptionMode={descriptionMode}
+      grouped={grouped}
+    >
+      <div className="flex flex-wrap justify-end gap-2">
+        {apps.map((app) => (
+          <span
+            key={app}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-mid-gray/30 text-xs"
+          >
+            {app}
+            <button
+              disabled={isUpdating("meeting_ignored_apps")}
+              onClick={() =>
+                updateSetting(
+                  "meeting_ignored_apps",
+                  apps.filter((a) => a !== app),
+                )
+              }
+              title={t("settings.meetings.ignoredApps.remove")}
+              className="text-text/40 hover:text-text cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </span>
+        ))}
+      </div>
+    </SettingContainer>
+  );
+};
+
 export const MeetingSettings: React.FC<MeetingSettingProps> = (props) => (
   <>
+    <MeetingAutoDetect {...props} />
+    <MeetingIgnoredApps {...props} />
     <ShortcutInput shortcutId="toggle_meeting" {...props} />
     <MeetingMaxLength {...props} />
     <MeetingAudioRetention {...props} />

@@ -162,6 +162,10 @@ const settingUpdaters: {
   history_limit: (value) => commands.updateHistoryLimit(value as number),
   meeting_max_minutes: (value) =>
     commands.changeMeetingMaxMinutesSetting(value as number),
+  meeting_auto_detect: (value) =>
+    commands.changeMeetingAutoDetectSetting(value as boolean),
+  meeting_ignored_apps: (value) =>
+    commands.changeMeetingIgnoredAppsSetting(value as string[]),
   meeting_audio_retention_days: (value) =>
     commands.changeMeetingAudioRetentionDaysSetting(value as number),
   post_process_enabled: (value) =>

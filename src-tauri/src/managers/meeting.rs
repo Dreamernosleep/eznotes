@@ -75,6 +75,8 @@ pub struct MeetingStatus {
 pub enum StopReason {
     Manual,
     MaxLength,
+    /// The meeting app released the microphone (auto-detected meetings).
+    AppClosed,
     Silence,
 }
 
@@ -243,12 +245,27 @@ impl MeetingManager {
         }
     }
 
+    /// Time since the last speech in the current meeting, if any was heard.
+    pub fn silence(&self) -> Option<Duration> {
+        self.active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.activity.silence())
+    }
+
     pub fn is_recording(&self) -> bool {
         self.active.lock().unwrap().is_some()
     }
 
     /// Start recording a meeting. `source_app` (e.g. "Zoom") only names it.
     pub fn start(&self, source_app: Option<String>) -> Result<i64> {
+        self.start_for_app(source_app, None)
+    }
+
+    /// Start recording; with `app_pid`, the other side is captured from that
+    /// app only (and its child processes), not from everything the PC plays.
+    pub fn start_for_app(&self, source_app: Option<String>, app_pid: Option<u32>) -> Result<i64> {
         let mut active = self.active.lock().unwrap();
         if active.is_some() {
             return Err(anyhow!("A meeting is already being recorded"));
@@ -278,7 +295,7 @@ impl MeetingManager {
         )?;
         let id = conn.last_insert_rowid();
 
-        match self.open_capture(id, &folder, started_at) {
+        match self.open_capture(id, &folder, started_at, app_pid) {
             Ok(meeting) => {
                 info!(
                     "Meeting {} recording started (system audio: {})",
@@ -299,7 +316,13 @@ impl MeetingManager {
         Ok(id)
     }
 
-    fn open_capture(&self, id: i64, folder: &Path, started_at: i64) -> Result<ActiveMeeting> {
+    fn open_capture(
+        &self,
+        id: i64,
+        folder: &Path,
+        started_at: i64,
+        app_pid: Option<u32>,
+    ) -> Result<ActiveMeeting> {
         let activity = Arc::new(Activity {
             started: Instant::now(),
             last_speech: AtomicU64::new(0),
@@ -335,14 +358,27 @@ impl MeetingManager {
 
         // Without system audio the meeting still records your side (e.g. an
         // in-person meeting), so a capture failure is not fatal.
+        // The meeting app's own audio when known; everything the PC plays if
+        // that isn't available (unknown app, or Windows older than 10 2004).
         #[cfg(windows)]
         let loopback = {
-            let system = system.clone();
-            match crate::audio_toolkit::audio::LoopbackCapture::start(move |samples| {
-                if let Some(writer) = system.lock().unwrap().as_mut() {
-                    writer.push(samples);
-                }
-            }) {
+            use crate::audio_toolkit::audio::LoopbackCapture;
+            let open = |target: Option<u32>| {
+                let system = system.clone();
+                LoopbackCapture::start(target, move |samples| {
+                    if let Some(writer) = system.lock().unwrap().as_mut() {
+                        writer.push(samples);
+                    }
+                })
+            };
+            let capture = match app_pid {
+                Some(pid) => open(Some(pid)).or_else(|e| {
+                    warn!("Meeting {id}: app-only audio unavailable ({e}); using all system audio");
+                    open(None)
+                }),
+                None => open(None),
+            };
+            match capture {
                 Ok(capture) => Some(capture),
                 Err(e) => {
                     warn!("Meeting {id}: recording without system audio: {e}");

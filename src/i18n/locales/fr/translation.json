@@ -728,6 +728,15 @@
         "days_one": "{{count}} jour",
         "days_other": "{{count}} jours",
         "forever": "Toujours"
+      },
+      "autoDetect": {
+        "label": "Détecter les réunions",
+        "description": "Proposer d'enregistrer quand Zoom, Teams, Google Meet, Webex, Slack ou Discord utilise votre micro."
+      },
+      "ignoredApps": {
+        "title": "Ne jamais proposer pour",
+        "description": "Les applications pour lesquelles vous avez choisi « Jamais ». Retirez-en une pour être de nouveau sollicité.",
+        "remove": "Proposer de nouveau pour cette application"
       }
     }
   },
@@ -809,5 +818,12 @@
     "learnMore": "Comment résoudre ce problème",
     "recorderBlocked": "Impossible d'enregistrer un raccourci pour le moment : Secure Input de macOS bloque les événements clavier. Résolvez d'abord l'avertissement Secure Input.",
     "dismiss": "Ignorer"
+  },
+  "meetingPrompt": {
+    "title": "Enregistrer cette réunion {{app}} ?",
+    "hint": "Votre voix et celle des autres, transcrites sur cet ordinateur.",
+    "record": "Enregistrer",
+    "notNow": "Pas maintenant",
+    "never": "Jamais pour {{app}}"
   }
 }

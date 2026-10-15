@@ -4,6 +4,10 @@
 //! loopback: it delivers whatever the PC plays. The audio is downmixed to mono
 //! and resampled to 16 kHz.
 //!
+//! Given a process id, only that app's audio is captured instead (Windows
+//! process loopback, including its child processes): a video or music
+//! playing in another app stays out of the meeting.
+//!
 //! WASAPI loopback delivers nothing while the PC is silent, so the capture
 //! fills those gaps with zeros: the output is a continuous 16 kHz timeline that
 //! stays aligned with the microphone recording.
@@ -39,17 +43,20 @@ pub struct LoopbackCapture {
 }
 
 impl LoopbackCapture {
-    /// Start capturing the default output device. `on_audio` receives 16 kHz
-    /// mono samples, continuous in time (silence filled), on the capture
-    /// thread.
-    pub fn start(on_audio: impl FnMut(&[f32]) + Send + 'static) -> Result<Self> {
+    /// Start capturing the default output device, or only process `target`
+    /// and its children. `on_audio` receives 16 kHz mono samples, continuous
+    /// in time (silence filled), on the capture thread.
+    pub fn start(
+        target: Option<u32>,
+        on_audio: impl FnMut(&[f32]) + Send + 'static,
+    ) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = mpsc::channel();
         let thread = thread::Builder::new()
             .name("meeting-loopback".into())
             .spawn({
                 let stop = stop.clone();
-                move || run_capture(stop, on_audio, ready_tx)
+                move || run_capture(target, stop, on_audio, ready_tx)
             })?;
         // Fail fast when the first stream can't open; later failures retry.
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
@@ -90,14 +97,17 @@ impl Drop for LoopbackCapture {
 
 /// An open loopback stream plus the receiving end of its audio.
 struct OpenStream {
-    // Kept alive for the stream's lifetime; cpal streams stop on drop.
-    _stream: cpal::Stream,
+    // Kept alive for the stream's lifetime; the capture stops on drop.
+    _keep: Box<dyn std::any::Any>,
     audio: mpsc::Receiver<Vec<f32>>,
     failed: Arc<AtomicBool>,
     resampler: MonoResampler,
 }
 
-fn open_stream() -> Result<OpenStream> {
+fn open_stream(target: Option<u32>) -> Result<OpenStream> {
+    if let Some(pid) = target {
+        return process::open(pid);
+    }
     let host = crate::audio_toolkit::get_cpal_host();
     let device = host
         .default_output_device()
@@ -152,7 +162,7 @@ fn open_stream() -> Result<OpenStream> {
         rate, channels
     );
     Ok(OpenStream {
-        _stream: stream,
+        _keep: Box::new(stream),
         audio,
         failed,
         resampler: MonoResampler::new(rate, WHISPER_SAMPLE_RATE as usize)?,
@@ -160,11 +170,12 @@ fn open_stream() -> Result<OpenStream> {
 }
 
 fn run_capture(
+    target: Option<u32>,
     stop: Arc<AtomicBool>,
     mut on_audio: impl FnMut(&[f32]),
     ready: mpsc::Sender<Result<()>>,
 ) {
-    let mut stream = match open_stream() {
+    let mut stream = match open_stream(target) {
         Ok(s) => {
             let _ = ready.send(Ok(()));
             Some(s)
@@ -196,7 +207,7 @@ fn run_capture(
         let Some(open) = stream.as_mut() else {
             fill_gap(&mut produced, &mut on_audio);
             if reopen_at.is_some_and(|at| Instant::now() >= at) {
-                match open_stream() {
+                match open_stream(target) {
                     Ok(s) => {
                         stream = Some(s);
                         reopen_at = None;
@@ -301,5 +312,269 @@ impl MonoResampler {
             }
             self.in_buf.clear();
         }
+    }
+}
+
+/// Windows process loopback: only one app's audio (and its child
+/// processes'), delivered by Windows already as 16 kHz mono 16-bit PCM.
+mod process {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+
+    use anyhow::{anyhow, Result};
+    use log::{info, warn};
+    use windows::core::{implement, Interface, Ref};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows::Win32::Media::Audio::{
+        ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+        IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
+        IAudioCaptureClient, IAudioClient, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+        AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+        AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+        PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+        WAVEFORMATEX,
+    };
+    use windows::Win32::System::Com::StructuredStorage::{
+        PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
+    };
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, BLOB, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::{IAgileObject, IAgileObject_Impl};
+    use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+    use windows::Win32::System::Variant::VT_BLOB;
+
+    use super::{MonoResampler, OpenStream};
+    use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
+
+    /// 100 ns units: 200 ms of buffering.
+    const BUFFER_DURATION: i64 = 2_000_000;
+
+    // Windows calls this from its own thread pool, so it must be agile.
+    #[implement(IActivateAudioInterfaceCompletionHandler, IAgileObject)]
+    struct Activated(mpsc::Sender<()>);
+
+    impl IAgileObject_Impl for Activated_Impl {}
+
+    impl IActivateAudioInterfaceCompletionHandler_Impl for Activated_Impl {
+        fn ActivateCompleted(
+            &self,
+            _operation: Ref<'_, IActivateAudioInterfaceAsyncOperation>,
+        ) -> windows::core::Result<()> {
+            let _ = self.0.send(());
+            Ok(())
+        }
+    }
+
+    /// The capture thread; stops and joins on drop.
+    struct Running {
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    pub(super) fn open(pid: u32) -> Result<OpenStream> {
+        let (tx, audio) = mpsc::channel::<Vec<f32>>();
+        let failed = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
+        let thread = thread::Builder::new()
+            .name("meeting-app-audio".into())
+            .spawn({
+                let failed = failed.clone();
+                let stop = stop.clone();
+                move || {
+                    unsafe {
+                        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    }
+                    match unsafe { start_client(pid) } {
+                        Ok((client, capture, event)) => {
+                            let _ = ready_tx.send(Ok(()));
+                            if let Err(e) = unsafe { pump(&capture, event, &tx, &stop) } {
+                                warn!("App audio capture for process {pid} ended: {e}");
+                                failed.store(true, Ordering::Release);
+                            }
+                            unsafe {
+                                let _ = client.Stop();
+                                let _ = CloseHandle(event);
+                            }
+                            // Release the COM objects before COM is torn down.
+                            drop(capture);
+                            drop(client);
+                        }
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(e));
+                        }
+                    }
+                    unsafe { CoUninitialize() };
+                }
+            })?;
+        let running = Running {
+            stop,
+            thread: Some(thread),
+        };
+        ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| anyhow!("App audio capture did not start in time"))??;
+        info!("Capturing the audio of process {pid} only");
+        Ok(OpenStream {
+            _keep: Box::new(running),
+            audio,
+            failed,
+            // Windows already converts to 16 kHz: no resampling.
+            resampler: MonoResampler::new(
+                WHISPER_SAMPLE_RATE as usize,
+                WHISPER_SAMPLE_RATE as usize,
+            )?,
+        })
+    }
+
+    unsafe fn start_client(pid: u32) -> Result<(IAudioClient, IAudioCaptureClient, HANDLE)> {
+        let params = AUDIOCLIENT_ACTIVATION_PARAMS {
+            ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+            Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+                ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                    TargetProcessId: pid,
+                    ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                },
+            },
+        };
+        // `PROPVARIANT`'s Drop runs PropVariantClear, which would try to free
+        // the blob, but the blob points at `params` on the stack.
+        let prop = std::mem::ManuallyDrop::new(PROPVARIANT {
+            Anonymous: PROPVARIANT_0 {
+                Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
+                    vt: VT_BLOB,
+                    wReserved1: 0,
+                    wReserved2: 0,
+                    wReserved3: 0,
+                    Anonymous: PROPVARIANT_0_0_0 {
+                        blob: BLOB {
+                            cbSize: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+                            pBlobData: &params as *const _ as *mut u8,
+                        },
+                    },
+                }),
+            },
+        });
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let handler: IActivateAudioInterfaceCompletionHandler = Activated(done_tx).into();
+        let operation = ActivateAudioInterfaceAsync(
+            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+            &IAudioClient::IID,
+            Some(&*prop),
+            &handler,
+        )?;
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| anyhow!("App audio activation timed out"))?;
+        let mut activated = windows::core::HRESULT(0);
+        let mut unknown = None;
+        operation.GetActivateResult(&mut activated, &mut unknown)?;
+        activated.ok()?;
+        let client: IAudioClient = unknown
+            .ok_or_else(|| anyhow!("App audio activation returned nothing"))?
+            .cast()?;
+
+        let block_align = 2u16;
+        let format = WAVEFORMATEX {
+            wFormatTag: 1, // PCM
+            nChannels: 1,
+            nSamplesPerSec: WHISPER_SAMPLE_RATE,
+            nAvgBytesPerSec: WHISPER_SAMPLE_RATE * block_align as u32,
+            nBlockAlign: block_align,
+            wBitsPerSample: 16,
+            cbSize: 0,
+        };
+        client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK
+                | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            BUFFER_DURATION,
+            0,
+            &format,
+            None,
+        )?;
+        let event = CreateEventW(None, false, false, None)?;
+        client.SetEventHandle(event)?;
+        let capture: IAudioCaptureClient = client.GetService()?;
+        client.Start()?;
+        Ok((client, capture, event))
+    }
+
+    unsafe fn pump(
+        capture: &IAudioCaptureClient,
+        event: HANDLE,
+        tx: &mpsc::Sender<Vec<f32>>,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        while !stop.load(Ordering::Acquire) {
+            if WaitForSingleObject(event, 100) != WAIT_OBJECT_0 {
+                continue;
+            }
+            loop {
+                let packet = capture.GetNextPacketSize()?;
+                if packet == 0 {
+                    break;
+                }
+                let mut data = std::ptr::null_mut();
+                let mut frames = 0u32;
+                let mut flags = 0u32;
+                capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
+                let samples: Vec<f32> = if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
+                    vec![0.0; frames as usize]
+                } else {
+                    std::slice::from_raw_parts(data as *const i16, frames as usize)
+                        .iter()
+                        .map(|&s| s as f32 / i16::MAX as f32)
+                        .collect()
+                };
+                capture.ReleaseBuffer(frames)?;
+                if tx.send(samples).is_err() {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Manual check against a real app: `EZNOTES_LOOPBACK_PID=<pid> cargo test
+    /// process_loopback_smoke -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn process_loopback_smoke() {
+        let pid: u32 = std::env::var("EZNOTES_LOOPBACK_PID")
+            .expect("set EZNOTES_LOOPBACK_PID")
+            .parse()
+            .unwrap();
+        let total = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = total.clone();
+        let capture = LoopbackCapture::start(Some(pid), move |s| {
+            counter.fetch_add(s.len(), Ordering::Relaxed);
+        })
+        .expect("capture starts");
+        thread::sleep(Duration::from_secs(3));
+        capture.stop();
+        let got = total.load(Ordering::Relaxed);
+        println!("captured {got} samples (~{} s)", got / 16_000);
+        assert!(got > 16_000, "expected about 3 s of audio");
     }
 }

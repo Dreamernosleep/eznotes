@@ -14,6 +14,7 @@ mod helpers;
 mod input;
 mod llm_client;
 mod managers;
+mod meeting_prompt;
 mod memory;
 mod overlay;
 mod paste_tx;
@@ -229,6 +230,10 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(history_manager.clone());
     app_handle.manage(speaker_manager);
     app_handle.manage(meeting_manager.clone());
+    let meeting_detector = Arc::new(managers::meeting_detect::MeetingDetector::new(app_handle));
+    #[cfg(windows)]
+    meeting_detector.spawn();
+    app_handle.manage(meeting_detector);
     app_handle.manage(tray::TrayState::new());
 
     // Finish meetings a crash or forced quit left mid-recording, then resume
@@ -914,6 +919,12 @@ pub fn run(cli_args: CliArgs) {
             commands::meetings::open_meeting_folder,
             commands::meetings::change_meeting_max_minutes_setting,
             commands::meetings::change_meeting_audio_retention_days_setting,
+            commands::meetings::change_meeting_auto_detect_setting,
+            commands::meetings::change_meeting_ignored_apps_setting,
+            commands::meetings::meeting_prompt_current,
+            commands::meetings::meeting_prompt_record,
+            commands::meetings::meeting_prompt_dismiss,
+            commands::meetings::meeting_prompt_never,
             commands::history::get_history_entries,
             commands::history::toggle_history_entry_saved,
             commands::history::get_audio_file_path,

@@ -112,7 +112,10 @@ webview2-com = "0.38"
 # with proper runtime CPU dispatch. Base `transcribe-rs` (features = ["onnx"])
 # is inherited here, so Parakeet/Moonshine/etc. still run on CPU.
 windows = { version = "0.61.3", features = [
+  "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
+  "Win32_Security",
+  "Win32_System_Com",
   "Win32_System_Com_StructuredStorage",
   "Win32_System_DataExchange",
   "Win32_System_LibraryLoader",
@@ -128,6 +131,9 @@ winreg = "0.55"
 # Meeting recording: resamples system audio (WASAPI loopback via rodio's cpal)
 # to 16 kHz. Same version handy-recorder already builds.
 rubato = "=5.0.0"
+# `#[implement]` (COM callback for per-app audio capture) expands to
+# `::windows_core`; same version the `windows` crate already uses.
+windows-core = "=0.61.2"
 
 # Whisper backend per Windows arch. x86_64 ships the Vulkan GPU backend and
 # keeps the dynamic-backends posture (loadable per-ISA CPU modules + Vulkan),

@@ -467,6 +467,12 @@ pub struct AppSettings {
     /// Days to keep meeting audio files (0 = forever). Transcripts stay.
     #[serde(default = "default_meeting_audio_retention_days")]
     pub meeting_audio_retention_days: u32,
+    /// Offer to record when a meeting app starts using the microphone.
+    #[serde(default = "default_meeting_auto_detect")]
+    pub meeting_auto_detect: bool,
+    /// Apps (exe names or Store ids) never offered for recording.
+    #[serde(default)]
+    pub meeting_ignored_apps: Vec<String>,
     #[serde(default)]
     pub paste_method: PasteMethod,
     #[serde(default)]
@@ -665,6 +671,10 @@ fn default_meeting_max_minutes() -> u32 {
 
 fn default_meeting_audio_retention_days() -> u32 {
     7
+}
+
+fn default_meeting_auto_detect() -> bool {
+    true
 }
 
 fn default_audio_feedback_volume() -> f32 {
@@ -1019,6 +1029,8 @@ pub fn get_default_settings() -> AppSettings {
         recording_retention_period: default_recording_retention_period(),
         meeting_max_minutes: default_meeting_max_minutes(),
         meeting_audio_retention_days: default_meeting_audio_retention_days(),
+        meeting_auto_detect: true,
+        meeting_ignored_apps: Vec::new(),
         paste_method: PasteMethod::default(),
         clipboard_handling: ClipboardHandling::default(),
         auto_submit: default_auto_submit(),

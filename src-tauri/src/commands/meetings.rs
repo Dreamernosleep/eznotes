@@ -1,5 +1,6 @@
 use crate::managers::history::HistoryManager;
 use crate::managers::meeting::{MeetingManager, MeetingStatus, StopReason};
+use crate::managers::meeting_detect::{DetectedMeeting, MeetingDetector};
 use crate::managers::meeting_store::{self, MeetingDetail, MeetingSummary};
 use crate::settings::{get_settings, write_settings};
 use std::sync::Arc;
@@ -193,4 +194,59 @@ pub fn change_meeting_audio_retention_days_setting(
     write_settings(&app, settings);
     meeting_manager.cleanup_old_audio();
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_meeting_auto_detect_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.meeting_auto_detect = enabled;
+    write_settings(&app, settings);
+    Ok(())
+}
+
+/// Replace the list of apps never offered for recording.
+#[tauri::command]
+#[specta::specta]
+pub fn change_meeting_ignored_apps_setting(
+    app: AppHandle,
+    apps: Vec<String>,
+) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.meeting_ignored_apps = apps;
+    write_settings(&app, settings);
+    Ok(())
+}
+
+/// The meeting the prompt card is offering, if any.
+#[tauri::command]
+#[specta::specta]
+pub fn meeting_prompt_current(
+    detector: State<'_, Arc<MeetingDetector>>,
+) -> Option<DetectedMeeting> {
+    detector.current()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn meeting_prompt_record(
+    detector: State<'_, Arc<MeetingDetector>>,
+) -> Result<i64, String> {
+    let detector = detector.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || detector.accept())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn meeting_prompt_dismiss(detector: State<'_, Arc<MeetingDetector>>) {
+    detector.dismiss();
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn meeting_prompt_never(detector: State<'_, Arc<MeetingDetector>>) {
+    detector.ignore_app();
 }
