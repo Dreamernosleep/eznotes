@@ -52,6 +52,8 @@ const SILENCE_STOP: Duration = Duration::from_secs(10 * 60);
 /// Warn this long before the maximum length is reached.
 const MAX_LENGTH_WARNING: Duration = Duration::from_secs(2 * 60);
 const WATCHDOG_TICK: Duration = Duration::from_secs(1);
+/// How often the meeting window is read for who is speaking.
+const SCREEN_POLL: Duration = Duration::from_secs(1);
 const SILERO_THRESHOLD: f32 = 0.3;
 const EARSHOT_THRESHOLD: f32 = 0.5;
 
@@ -200,6 +202,8 @@ struct ActiveMeeting {
     watchdog_stop: Arc<AtomicBool>,
     /// Live transcription; ends once both channel writers are finished.
     live: JoinHandle<()>,
+    /// Stops the meeting-window reader (speaker names), if one runs.
+    screen_stop: Arc<AtomicBool>,
 }
 
 pub struct MeetingManager {
@@ -328,6 +332,7 @@ impl MeetingManager {
             last_speech: AtomicU64::new(0),
         });
 
+        let activity_for_screen = activity.clone();
         let (live_tx, live_rx) = mpsc::channel();
         let live = spawn_transcriber(self.app_handle.clone(), id, live_rx);
 
@@ -398,7 +403,42 @@ impl MeetingManager {
             system,
             watchdog_stop: Arc::new(AtomicBool::new(false)),
             live,
+            screen_stop: self.spawn_screen_reader(id, app_pid, activity_for_screen),
         })
+    }
+
+    /// While a meeting from a known app records, read its window every second
+    /// for who it shows as speaking. One name at a time is a clear signal;
+    /// several (or none) is skipped.
+    fn spawn_screen_reader(
+        &self,
+        id: i64,
+        app_pid: Option<u32>,
+        activity: Arc<Activity>,
+    ) -> Arc<AtomicBool> {
+        let stop = Arc::new(AtomicBool::new(false));
+        #[cfg(windows)]
+        if let Some(pid) = app_pid.filter(|_| get_settings(&self.app_handle).meeting_screen_names) {
+            let stop = stop.clone();
+            let history = self.history.clone();
+            thread::spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    let names = crate::managers::meeting_screen::speaking_names(pid);
+                    if let [name] = names.as_slice() {
+                        let t_ms = activity.started.elapsed().as_millis() as i64;
+                        if let Ok(conn) = history.get_connection() {
+                            let _ = crate::managers::meeting_names::save_highlight(
+                                &conn, id, t_ms, name,
+                            );
+                        }
+                    }
+                    thread::sleep(SCREEN_POLL);
+                }
+            });
+        }
+        #[cfg(not(windows))]
+        let _ = (id, app_pid, activity);
+        stop
     }
 
     /// Silero (the dictation default), or Earshot if Silero can't load. Only
@@ -431,6 +471,7 @@ impl MeetingManager {
             return Ok(None);
         };
         meeting.watchdog_stop.store(true, Ordering::Release);
+        meeting.screen_stop.store(true, Ordering::Release);
         let duration = meeting.activity.started.elapsed();
         let heard_speech = meeting.activity.heard_speech();
         let id = meeting.id;

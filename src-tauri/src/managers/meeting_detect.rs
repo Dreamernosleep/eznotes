@@ -384,13 +384,19 @@ impl MeetingDetector {
 
     fn show_prompt(&self, meeting: &DetectedMeeting) {
         debug!("Meeting detected: {} ({})", meeting.app, meeting.app_id);
-        crate::meeting_prompt::show(&self.app, PROMPT_WINDOW);
+        // Content first, so the card never flashes a previous meeting.
         let _ = self.app.emit_to(PROMPT_WINDOW, PROMPT_EVENT, Some(meeting));
+        crate::meeting_prompt::show(&self.app, PROMPT_WINDOW);
     }
 
     fn hide_prompt(&self) {
         if let Some(window) = self.app.get_webview_window(PROMPT_WINDOW) {
-            let _ = window.hide();
+            if window.is_visible().unwrap_or(false) {
+                let _ = window.hide();
+                let _ = self
+                    .app
+                    .emit_to(PROMPT_WINDOW, PROMPT_EVENT, None::<DetectedMeeting>);
+            }
         }
     }
 

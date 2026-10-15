@@ -73,6 +73,14 @@ static MIGRATIONS: &[M] = &[
             PRIMARY KEY (meeting_id, speaker_key)
         );",
     ),
+    // Who the meeting app showed as speaking, and when (ms into the meeting).
+    M::up(
+        "CREATE TABLE IF NOT EXISTS meeting_highlights (
+            meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            t_ms INTEGER NOT NULL,
+            name TEXT NOT NULL
+        );",
+    ),
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]

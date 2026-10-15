@@ -473,6 +473,9 @@ pub struct AppSettings {
     /// Apps (exe names or Store ids) never offered for recording.
     #[serde(default)]
     pub meeting_ignored_apps: Vec<String>,
+    /// Name speakers from what the meeting app shows as speaking.
+    #[serde(default = "default_meeting_screen_names")]
+    pub meeting_screen_names: bool,
     #[serde(default)]
     pub paste_method: PasteMethod,
     #[serde(default)]
@@ -674,6 +677,10 @@ fn default_meeting_audio_retention_days() -> u32 {
 }
 
 fn default_meeting_auto_detect() -> bool {
+    true
+}
+
+fn default_meeting_screen_names() -> bool {
     true
 }
 
@@ -1031,6 +1038,7 @@ pub fn get_default_settings() -> AppSettings {
         meeting_audio_retention_days: default_meeting_audio_retention_days(),
         meeting_auto_detect: true,
         meeting_ignored_apps: Vec::new(),
+        meeting_screen_names: default_meeting_screen_names(),
         paste_method: PasteMethod::default(),
         clipboard_handling: ClipboardHandling::default(),
         auto_submit: default_auto_submit(),

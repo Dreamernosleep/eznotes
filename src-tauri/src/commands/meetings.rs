@@ -250,3 +250,12 @@ pub fn meeting_prompt_dismiss(detector: State<'_, Arc<MeetingDetector>>) {
 pub fn meeting_prompt_never(detector: State<'_, Arc<MeetingDetector>>) {
     detector.ignore_app();
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_meeting_screen_names_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.meeting_screen_names = enabled;
+    write_settings(&app, settings);
+    Ok(())
+}

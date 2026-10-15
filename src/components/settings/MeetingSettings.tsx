@@ -101,6 +101,26 @@ export const MeetingAutoDetect: React.FC<MeetingSettingProps> = ({
   );
 };
 
+export const MeetingScreenNames: React.FC<MeetingSettingProps> = ({
+  descriptionMode = "tooltip",
+  grouped = false,
+}) => {
+  const { t } = useTranslation();
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+  return (
+    <ToggleSwitch
+      checked={getSetting("meeting_screen_names") ?? true}
+      onChange={(enabled) => updateSetting("meeting_screen_names", enabled)}
+      isUpdating={isUpdating("meeting_screen_names")}
+      label={t("settings.meetings.screenNames.label")}
+      description={t("settings.meetings.screenNames.description")}
+      descriptionMode={descriptionMode}
+      grouped={grouped}
+      tooltipPosition="bottom"
+    />
+  );
+};
+
 /** Apps the user chose "Never" for; each can be removed again. */
 export const MeetingIgnoredApps: React.FC<MeetingSettingProps> = ({
   descriptionMode = "tooltip",
@@ -148,6 +168,7 @@ export const MeetingSettings: React.FC<MeetingSettingProps> = (props) => (
   <>
     <MeetingAutoDetect {...props} />
     <MeetingIgnoredApps {...props} />
+    <MeetingScreenNames {...props} />
     <ShortcutInput shortcutId="toggle_meeting" {...props} />
     <MeetingMaxLength {...props} />
     <MeetingAudioRetention {...props} />

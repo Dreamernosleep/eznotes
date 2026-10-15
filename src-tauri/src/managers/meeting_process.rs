@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
 use crate::managers::history::HistoryManager;
 use crate::managers::meeting::{MIC_WAV, SYSTEM_WAV};
+use crate::managers::meeting_names;
 use crate::managers::speakers::{label_segments, LabelledSegment, SpeakerManager};
 use crate::managers::transcription::{TimedText, TranscriptionManager};
 
@@ -103,15 +104,14 @@ fn process(app: &AppHandle, id: i64) -> Result<()> {
 
     // The other people: separate their voices, then label the words.
     let system_path = folder.join(SYSTEM_WAV);
+    let mut turns = Vec::new();
     let system = if system_path.exists() {
         let audio = read_wav(&system_path)?;
         let words = transcribe_chunked(&tm, &audio)?;
-        let turns = if words.is_empty() {
-            Vec::new()
-        } else {
+        if !words.is_empty() {
             tauri::async_runtime::block_on(sm.ensure_model())?;
-            sm.diarize(audio, None)?
-        };
+            turns = sm.diarize(audio, None)?;
+        }
         label_segments(&words, &turns)
     } else {
         Vec::new()
@@ -126,7 +126,19 @@ fn process(app: &AppHandle, id: i64) -> Result<()> {
         );
     }
 
-    save_final(&history, id, &mic, &system)
+    save_final(&history, id, &mic, &system)?;
+
+    // Real names from the meeting window, where it showed who was speaking.
+    let conn = history.get_connection()?;
+    let names = meeting_names::assign_names(&meeting_names::highlights(&conn, id)?, &turns);
+    if !names.is_empty() {
+        info!(
+            "Meeting {id}: {} speaker name(s) from the meeting window",
+            names.len()
+        );
+        meeting_names::save_screen_names(&conn, id, &names)?;
+    }
+    Ok(())
 }
 
 /// Transcribe in chunks of at most [`CHUNK_MS`], cut at pauses, returning
