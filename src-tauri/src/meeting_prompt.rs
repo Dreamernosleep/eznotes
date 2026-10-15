@@ -5,9 +5,10 @@
 use log::debug;
 use tauri::{AppHandle, LogicalPosition, Manager, WebviewWindowBuilder};
 
-const WIDTH: f64 = 340.0;
-const HEIGHT: f64 = 132.0;
-const MARGIN: f64 = 16.0;
+// Includes 12 px around the card for its shadow.
+const WIDTH: f64 = 360.0;
+const HEIGHT: f64 = 148.0;
+const MARGIN: f64 = 8.0;
 
 /// Show the prompt window `label`, creating it if needed.
 pub fn show(app: &AppHandle, label: &str) {

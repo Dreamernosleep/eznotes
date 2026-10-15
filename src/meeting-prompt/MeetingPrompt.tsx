@@ -32,8 +32,10 @@ const MeetingPrompt: React.FC = () => {
   };
 
   return (
-    <div className="h-full w-full p-1">
-      <div className="h-full w-full rounded-xl border border-mid-gray/30 bg-background shadow-lg px-4 py-3 flex flex-col justify-between text-text">
+    // The padding leaves room for the shadow inside the transparent window,
+    // so its edge is never clipped into a hard line.
+    <div className="h-full w-full p-3">
+      <div className="h-full w-full rounded-2xl border border-mid-gray/15 bg-background shadow-[0_4px_14px_rgba(0,0,0,0.14)] px-4 py-3 flex flex-col justify-between text-text">
         <div className="flex items-start justify-between gap-2">
           <div>
             <p className="text-sm font-semibold">
@@ -66,7 +68,7 @@ const MeetingPrompt: React.FC = () => {
             <button
               onClick={record}
               disabled={busy}
-              className="px-3 py-1 text-sm rounded-md bg-logo-primary text-white font-medium flex items-center gap-1.5 hover:opacity-90 disabled:opacity-50 cursor-pointer"
+              className="px-3 py-1 text-sm rounded-md bg-background-ui text-white font-medium flex items-center gap-1.5 hover:bg-background-ui/80 disabled:opacity-50 cursor-pointer"
             >
               <Circle className="w-2.5 h-2.5 fill-current" />
               {t("meetingPrompt.record")}
