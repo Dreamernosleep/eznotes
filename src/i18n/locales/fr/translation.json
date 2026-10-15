@@ -220,6 +220,10 @@
           "transcribe_with_post_process": {
             "name": "Raccourci de post-traitement",
             "description": "Facultatif : Un raccourci dédié qui applique toujours le post-traitement IA à votre transcription."
+          },
+          "toggle_meeting": {
+            "name": "Raccourci d'enregistrement de réunion",
+            "description": "Démarre ou arrête l'enregistrement d'une réunion."
           }
         },
         "errors": {
@@ -285,7 +289,8 @@
         "output": "Sortie",
         "transcription": "Transcription",
         "history": "Historique",
-        "experimental": "Expérimental"
+        "experimental": "Expérimental",
+        "meetings": "Réunions"
       },
       "experimentalToggle": {
         "label": "Fonctionnalités Expérimentales",
@@ -507,7 +512,11 @@
       "retranscribe": "Re-transcrire",
       "retranscribeError": "Impossible de re-transcrire. Veuillez réessayer.",
       "transcribing": "Transcription en cours...",
-      "transcriptionFailed": "La transcription a échoué. Vous pouvez re-transcrire en utilisant l'icône de réessai."
+      "transcriptionFailed": "La transcription a échoué. Vous pouvez re-transcrire en utilisant l'icône de réessai.",
+      "tabs": {
+        "dictations": "Dictées",
+        "meetings": "Réunions"
+      }
     },
     "debug": {
       "title": "Débogage",
@@ -674,6 +683,51 @@
       "whatsNewUpdates": {
         "label": "Afficher les nouveautés",
         "description": "Afficher les notes de version après les mises à jour de Handy"
+      }
+    },
+    "meetings": {
+      "record": "Enregistrer la réunion",
+      "recordHint": "Enregistrez votre voix et celle des autres participants.",
+      "recordingNow": "Enregistrement de la réunion",
+      "micOnly": "(votre micro seulement)",
+      "stop": "Arrêter",
+      "empty": "Aucune réunion. Démarrez-en une ici ou depuis la barre des tâches.",
+      "back": "Réunions",
+      "copyMarkdown": "Copier en Markdown",
+      "copyError": "Impossible de copier la réunion.",
+      "openFolder": "Ouvrir le dossier de la réunion",
+      "retry": "Traiter de nouveau",
+      "delete": "Supprimer la réunion",
+      "deleteConfirm": "Cliquez de nouveau pour supprimer cette réunion",
+      "renameTitle": "Renommer la réunion",
+      "renameSpeaker": "Renommer l'intervenant partout",
+      "notes": "Notes",
+      "notesPlaceholder": "Vos notes pour cette réunion…",
+      "transcript": "Transcription",
+      "liveNote": "Transcription en direct — les intervenants sont identifiés après la réunion",
+      "waiting": "La transcription apparaîtra ici.",
+      "noTranscript": "Aucune parole n'a été transcrite.",
+      "you": "Vous",
+      "others": "Autres",
+      "lengthWarning": "L'enregistrement s'arrête dans {{minutes}} minutes (durée maximale).",
+      "status": {
+        "recording": "Enregistrement",
+        "processing": "Traitement…",
+        "failed": "Échec"
+      },
+      "maxLength": {
+        "title": "Durée maximale d'une réunion",
+        "description": "L'enregistrement d'une réunion s'arrête seul après cette durée.",
+        "minutes": "{{count}} minutes",
+        "hours_one": "{{count}} heure",
+        "hours_other": "{{count}} heures"
+      },
+      "audioRetention": {
+        "title": "Conserver l'audio des réunions",
+        "description": "Durée de conservation des enregistrements. Les transcriptions et les notes sont toujours conservées.",
+        "days_one": "{{count}} jour",
+        "days_other": "{{count}} jours",
+        "forever": "Toujours"
       }
     }
   },

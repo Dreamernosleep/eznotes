@@ -160,6 +160,10 @@ const settingUpdaters: {
   auto_submit_key: (value) =>
     commands.changeAutoSubmitKeySetting(value as string),
   history_limit: (value) => commands.updateHistoryLimit(value as number),
+  meeting_max_minutes: (value) =>
+    commands.changeMeetingMaxMinutesSetting(value as number),
+  meeting_audio_retention_days: (value) =>
+    commands.changeMeetingAudioRetentionDaysSetting(value as number),
   post_process_enabled: (value) =>
     commands.changePostProcessEnabledSetting(value as boolean),
   post_process_selected_prompt_id: (value) =>

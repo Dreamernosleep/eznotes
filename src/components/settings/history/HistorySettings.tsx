@@ -15,6 +15,66 @@ import { formatDateTime } from "@/utils/dateFormat";
 import { AudioPlayer, AudioPlayerGroup } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
 import { copyToClipboard } from "./clipboard";
+import { MeetingsHistory } from "./MeetingsHistory";
+
+type HistoryTab = "dictations" | "meetings";
+const TAB_STORAGE_KEY = "history-tab";
+
+const readStoredTab = (): HistoryTab => {
+  try {
+    return localStorage.getItem(TAB_STORAGE_KEY) === "meetings"
+      ? "meetings"
+      : "dictations";
+  } catch {
+    return "dictations";
+  }
+};
+
+/** History: dictations (Handy's list) and meetings, as two tabs. */
+export const HistorySettings: React.FC = () => {
+  const { t } = useTranslation();
+  const [tab, setTab] = useState<HistoryTab>(readStoredTab);
+
+  const select = (next: HistoryTab) => {
+    setTab(next);
+    try {
+      localStorage.setItem(TAB_STORAGE_KEY, next);
+    } catch {
+      // Storage can be unavailable; the tab still switches.
+    }
+  };
+
+  const tabClass = (value: HistoryTab) =>
+    `px-3 py-1.5 text-sm rounded-md transition-colors cursor-pointer ${
+      tab === value
+        ? "bg-logo-primary/15 text-logo-primary font-medium"
+        : "text-text/60 hover:text-text"
+    }`;
+
+  return (
+    <div className="max-w-3xl w-full mx-auto space-y-4">
+      <div className="px-4 flex gap-1" role="tablist">
+        <button
+          role="tab"
+          aria-selected={tab === "dictations"}
+          className={tabClass("dictations")}
+          onClick={() => select("dictations")}
+        >
+          {t("settings.history.tabs.dictations")}
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === "meetings"}
+          className={tabClass("meetings")}
+          onClick={() => select("meetings")}
+        >
+          {t("settings.history.tabs.meetings")}
+        </button>
+      </div>
+      {tab === "dictations" ? <DictationHistory /> : <MeetingsHistory />}
+    </div>
+  );
+};
 
 const IconButton: React.FC<{
   onClick: () => void;
@@ -60,7 +120,7 @@ const OpenRecordingsButton: React.FC<OpenRecordingsButtonProps> = ({
   </Button>
 );
 
-export const HistorySettings: React.FC = () => {
+const DictationHistory: React.FC = () => {
   const { t } = useTranslation();
   const osType = useOsType();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);

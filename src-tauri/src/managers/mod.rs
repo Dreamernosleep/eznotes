@@ -4,6 +4,7 @@ pub mod history;
 pub mod meeting;
 pub mod meeting_live;
 pub mod meeting_process;
+pub mod meeting_store;
 pub mod model;
 pub mod model_capabilities;
 pub mod speakers;

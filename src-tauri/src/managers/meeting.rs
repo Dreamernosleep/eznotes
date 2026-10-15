@@ -35,6 +35,7 @@ use crate::managers::meeting_live::{
     spawn_transcriber, MeetingChannel, Utterance, UtteranceCutter,
 };
 use crate::managers::meeting_process::spawn_processing;
+use crate::managers::meeting_store;
 use crate::settings::get_settings;
 
 /// Folder under the app data dir that holds one sub-folder per meeting.
@@ -512,6 +513,41 @@ impl MeetingManager {
                             "UPDATE meetings SET status = 'failed', error = ?2 WHERE id = ?1",
                             params![id, e.to_string()],
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Delete audio of finished meetings older than the retention setting
+    /// (transcripts and notes are kept).
+    pub fn cleanup_old_audio(&self) {
+        let days = get_settings(&self.app_handle).meeting_audio_retention_days;
+        if days == 0 {
+            return;
+        }
+        let cutoff = Local::now().timestamp_millis() - days as i64 * 24 * 3600 * 1000;
+        let folders = match self
+            .history
+            .get_connection()
+            .and_then(|conn| meeting_store::audio_expired_folders(&conn, cutoff))
+        {
+            Ok(folders) => folders,
+            Err(e) => {
+                error!("Meeting audio cleanup: {e}");
+                return;
+            }
+        };
+        let Ok(data_dir) = crate::portable::app_data_dir(&self.app_handle) else {
+            return;
+        };
+        for folder in folders {
+            for name in [MIC_WAV, SYSTEM_WAV] {
+                let path = data_dir.join(&folder).join(name);
+                if path.exists() {
+                    match fs::remove_file(&path) {
+                        Ok(()) => info!("Removed old meeting audio {}", path.display()),
+                        Err(e) => warn!("Could not remove {}: {e}", path.display()),
                     }
                 }
             }

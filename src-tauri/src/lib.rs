@@ -237,6 +237,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     std::thread::spawn(move || {
         meeting_manager.recover_interrupted();
         managers::meeting_process::resume_pending(&resume_app);
+        meeting_manager.cleanup_old_audio();
     });
 
     // Note: Shortcuts are NOT initialized here.
@@ -902,6 +903,17 @@ pub fn run(cli_args: CliArgs) {
             commands::meetings::start_meeting_recording,
             commands::meetings::stop_meeting_recording,
             commands::meetings::get_meeting_status,
+            commands::meetings::list_meetings,
+            commands::meetings::get_meeting,
+            commands::meetings::get_meeting_markdown,
+            commands::meetings::update_meeting_notes,
+            commands::meetings::rename_meeting,
+            commands::meetings::rename_meeting_speaker,
+            commands::meetings::delete_meeting,
+            commands::meetings::retry_meeting_processing,
+            commands::meetings::open_meeting_folder,
+            commands::meetings::change_meeting_max_minutes_setting,
+            commands::meetings::change_meeting_audio_retention_days_setting,
             commands::history::get_history_entries,
             commands::history::toggle_history_entry_saved,
             commands::history::get_audio_file_path,

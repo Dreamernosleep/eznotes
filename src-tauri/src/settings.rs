@@ -464,6 +464,9 @@ pub struct AppSettings {
     /// A meeting recording stops by itself after this many minutes.
     #[serde(default = "default_meeting_max_minutes")]
     pub meeting_max_minutes: u32,
+    /// Days to keep meeting audio files (0 = forever). Transcripts stay.
+    #[serde(default = "default_meeting_audio_retention_days")]
+    pub meeting_audio_retention_days: u32,
     #[serde(default)]
     pub paste_method: PasteMethod,
     #[serde(default)]
@@ -658,6 +661,10 @@ fn default_recording_retention_period() -> RecordingRetentionPeriod {
 
 fn default_meeting_max_minutes() -> u32 {
     120
+}
+
+fn default_meeting_audio_retention_days() -> u32 {
+    7
 }
 
 fn default_audio_feedback_volume() -> f32 {
@@ -960,6 +967,16 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
     bindings.insert(
+        "toggle_meeting".to_string(),
+        ShortcutBinding {
+            id: "toggle_meeting".to_string(),
+            name: "Meeting Recording".to_string(),
+            description: "Starts or stops recording a meeting.".to_string(),
+            default_binding: "ctrl+alt+m".to_string(),
+            current_binding: "ctrl+alt+m".to_string(),
+        },
+    );
+    bindings.insert(
         "cancel".to_string(),
         ShortcutBinding {
             id: "cancel".to_string(),
@@ -1001,6 +1018,7 @@ pub fn get_default_settings() -> AppSettings {
         history_limit: default_history_limit(),
         recording_retention_period: default_recording_retention_period(),
         meeting_max_minutes: default_meeting_max_minutes(),
+        meeting_audio_retention_days: default_meeting_audio_retention_days(),
         paste_method: PasteMethod::default(),
         clipboard_handling: ClipboardHandling::default(),
         auto_submit: default_auto_submit(),

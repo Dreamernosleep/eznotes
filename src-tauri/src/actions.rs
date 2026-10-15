@@ -826,6 +826,17 @@ impl ShortcutAction for CancelAction {
     }
 }
 
+// Meeting recording: each press starts or stops a meeting.
+struct ToggleMeetingAction;
+
+impl ShortcutAction for ToggleMeetingAction {
+    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        crate::managers::meeting::toggle_meeting(app);
+    }
+
+    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {}
+}
+
 // Test Action
 struct TestAction;
 
@@ -865,6 +876,10 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     map.insert(
         "cancel".to_string(),
         Arc::new(CancelAction) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "toggle_meeting".to_string(),
+        Arc::new(ToggleMeetingAction) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "test".to_string(),

@@ -193,6 +193,10 @@
           "transcribe_with_post_process": {
             "name": "Post-Processing Hotkey",
             "description": "Optional: A dedicated hotkey that always applies AI post-processing to your transcription."
+          },
+          "toggle_meeting": {
+            "name": "Meeting Recording Shortcut",
+            "description": "Starts or stops recording a meeting."
           }
         },
         "errors": {
@@ -285,7 +289,8 @@
         "output": "Output",
         "transcription": "Transcription",
         "history": "History",
-        "experimental": "Experimental"
+        "experimental": "Experimental",
+        "meetings": "Meetings"
       },
       "experimentalToggle": {
         "label": "Experimental Features",
@@ -507,7 +512,11 @@
       "retranscribe": "Re-transcribe",
       "retranscribeError": "Failed to re-transcribe. Please try again.",
       "transcribing": "Transcribing...",
-      "transcriptionFailed": "Transcription failed. You can re-transcribe using the retry icon."
+      "transcriptionFailed": "Transcription failed. You can re-transcribe using the retry icon.",
+      "tabs": {
+        "dictations": "Dictations",
+        "meetings": "Meetings"
+      }
     },
     "debug": {
       "title": "Debug",
@@ -674,6 +683,51 @@
           "description": "High-performance tensor library for on-device machine learning inference",
           "details": "Handy's local speech-to-text is built on transcribe.cpp and ggml. Thanks to the amazing work by Georgi Gerganov and contributors."
         }
+      }
+    },
+    "meetings": {
+      "record": "Record meeting",
+      "recordHint": "Record your voice and the other people in a call.",
+      "recordingNow": "Recording meeting",
+      "micOnly": "(your mic only)",
+      "stop": "Stop",
+      "empty": "No meetings yet. Start one here or from the tray menu.",
+      "back": "Meetings",
+      "copyMarkdown": "Copy as Markdown",
+      "copyError": "Could not copy the meeting.",
+      "openFolder": "Open meeting folder",
+      "retry": "Process again",
+      "delete": "Delete meeting",
+      "deleteConfirm": "Click again to delete this meeting",
+      "renameTitle": "Rename meeting",
+      "renameSpeaker": "Rename speaker everywhere",
+      "notes": "Notes",
+      "notesPlaceholder": "Your notes for this meeting…",
+      "transcript": "Transcript",
+      "liveNote": "Live transcript — speakers are labelled after the meeting",
+      "waiting": "The transcript will appear here.",
+      "noTranscript": "No speech was transcribed.",
+      "you": "You",
+      "others": "Others",
+      "lengthWarning": "The meeting recording stops in {{minutes}} minutes (maximum length).",
+      "status": {
+        "recording": "Recording",
+        "processing": "Processing…",
+        "failed": "Failed"
+      },
+      "maxLength": {
+        "title": "Maximum Meeting Length",
+        "description": "A meeting recording stops by itself after this long.",
+        "minutes": "{{count}} minutes",
+        "hours_one": "{{count}} hour",
+        "hours_other": "{{count}} hours"
+      },
+      "audioRetention": {
+        "title": "Keep Meeting Audio",
+        "description": "How long to keep meeting recordings. Transcripts and notes are always kept.",
+        "days_one": "{{count}} day",
+        "days_other": "{{count}} days",
+        "forever": "Forever"
       }
     }
   },
