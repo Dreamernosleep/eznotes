@@ -190,15 +190,28 @@ fn energy(samples: &[f32]) -> f32 {
 /// A mic line is echo when most of its words were heard at about the same
 /// time on the system channel.
 fn is_echo(mic: &LabelledSegment, system: &[LabelledSegment]) -> bool {
-    let mine = words(&mic.text);
+    is_echo_text(
+        (mic.t0_ms, mic.t1_ms, &mic.text),
+        system.iter().map(|s| (s.t0_ms, s.t1_ms, s.text.as_str())),
+    )
+}
+
+/// [`is_echo`] on plain `(t0_ms, t1_ms, text)` lines; the live transcript
+/// uses it too.
+pub(crate) fn is_echo_text<'a>(
+    mic: (i64, i64, &str),
+    system: impl IntoIterator<Item = (i64, i64, &'a str)>,
+) -> bool {
+    let (t0, t1, text) = mic;
+    let mine = words(text);
     if mine.is_empty() {
         return false;
     }
     let mut heard: HashSet<String> = HashSet::new();
-    for s in system.iter().filter(|s| {
-        s.t0_ms <= mic.t1_ms + ECHO_TIME_SLACK_MS && mic.t0_ms <= s.t1_ms + ECHO_TIME_SLACK_MS
-    }) {
-        heard.extend(words(&s.text));
+    for (s0, s1, s_text) in system {
+        if s0 <= t1 + ECHO_TIME_SLACK_MS && t0 <= s1 + ECHO_TIME_SLACK_MS {
+            heard.extend(words(s_text));
+        }
     }
     let shared = mine.iter().filter(|w| heard.contains(*w)).count();
     shared as f32 / mine.len() as f32 >= ECHO_WORD_SHARE

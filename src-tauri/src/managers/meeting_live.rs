@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use log::{debug, error, warn};
 use rusqlite::params;
@@ -17,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
 use crate::managers::history::HistoryManager;
+use crate::managers::meeting_process::is_echo_text;
 use crate::managers::transcription::TranscriptionManager;
 
 /// Event carrying one [`LiveSegment`].
@@ -170,48 +172,106 @@ impl UtteranceCutter {
     }
 }
 
+/// Mic lines wait this long for the system line they might be echoing.
+const ECHO_HOLD: Duration = Duration::from_secs(3);
+/// System lines kept to compare new mic lines against.
+const RECENT_SYSTEM: usize = 20;
+
 /// Transcribe utterances as they arrive, until every sender is dropped (the
 /// meeting stopped). Join the handle before the after-meeting pass.
+///
+/// Without headphones the mic also hears the speakers, so a mic line is held
+/// for [`ECHO_HOLD`] and dropped if the system channel said the same thing.
 pub fn spawn_transcriber(
     app: AppHandle,
     meeting_id: i64,
     utterances: mpsc::Receiver<Utterance>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        while let Ok(u) = utterances.recv() {
-            let tm = app.state::<Arc<TranscriptionManager>>();
-            // Waits for an in-progress load; starts one if the model was
-            // unloaded (e.g. after the idle timeout).
-            tm.initiate_model_load();
-            let text = match tm.transcribe(u.samples) {
-                Ok(text) => text.trim().to_string(),
-                Err(e) => {
-                    warn!("Meeting {meeting_id}: live transcription failed: {e}");
-                    continue;
+        let mut held_mic: Vec<(Instant, LiveSegment)> = Vec::new();
+        let mut recent_system: VecDeque<LiveSegment> = VecDeque::new();
+        let mut open = true;
+        while open {
+            match utterances.recv_timeout(Duration::from_millis(500)) {
+                Ok(u) => {
+                    if let Some(segment) = transcribe(&app, meeting_id, u) {
+                        match segment.channel {
+                            MeetingChannel::System => {
+                                held_mic.retain(|(_, mic)| !echoes(mic, [&segment]));
+                                publish(&app, &segment);
+                                if recent_system.len() == RECENT_SYSTEM {
+                                    recent_system.pop_front();
+                                }
+                                recent_system.push_back(segment);
+                            }
+                            MeetingChannel::Mic => {
+                                if !echoes(&segment, recent_system.iter()) {
+                                    held_mic.push((Instant::now(), segment));
+                                }
+                            }
+                        }
+                    }
                 }
-            };
-            if text.is_empty() {
-                continue;
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => open = false,
             }
-            let segment = LiveSegment {
-                meeting_id,
-                channel: u.channel,
-                speaker_key: u.channel.default_speaker().to_string(),
-                t0_ms: u.t0_ms,
-                t1_ms: u.t1_ms,
-                text,
-            };
-            if let Err(e) = save_live_segment(&app, &segment) {
-                error!("Meeting {meeting_id}: saving live segment failed: {e}");
-            }
-            debug!(
-                "Meeting {meeting_id} [{}] {}",
-                segment.channel.as_str(),
-                crate::utils::redact_text(&segment.text)
-            );
-            let _ = app.emit(SEGMENT_EVENT, &segment);
+            let now = Instant::now();
+            held_mic.retain(|(at, mic)| {
+                let due = !open || now.duration_since(*at) >= ECHO_HOLD;
+                if due {
+                    publish(&app, mic);
+                }
+                !due
+            });
         }
     })
+}
+
+fn echoes<'a>(mic: &LiveSegment, system: impl IntoIterator<Item = &'a LiveSegment>) -> bool {
+    is_echo_text(
+        (mic.t0_ms, mic.t1_ms, &mic.text),
+        system
+            .into_iter()
+            .map(|s| (s.t0_ms, s.t1_ms, s.text.as_str())),
+    )
+}
+
+fn transcribe(app: &AppHandle, meeting_id: i64, u: Utterance) -> Option<LiveSegment> {
+    let tm = app.state::<Arc<TranscriptionManager>>();
+    // Waits for an in-progress load; starts one if the model was unloaded
+    // (e.g. after the idle timeout).
+    tm.initiate_model_load();
+    let text = match tm.transcribe(u.samples) {
+        Ok(text) => text.trim().to_string(),
+        Err(e) => {
+            warn!("Meeting {meeting_id}: live transcription failed: {e}");
+            return None;
+        }
+    };
+    (!text.is_empty()).then(|| LiveSegment {
+        meeting_id,
+        channel: u.channel,
+        speaker_key: u.channel.default_speaker().to_string(),
+        t0_ms: u.t0_ms,
+        t1_ms: u.t1_ms,
+        text,
+    })
+}
+
+fn publish(app: &AppHandle, segment: &LiveSegment) {
+    if let Err(e) = save_live_segment(app, segment) {
+        error!(
+            "Meeting {}: saving live segment failed: {e}",
+            segment.meeting_id
+        );
+    }
+    debug!(
+        "Meeting {} [{}] {}",
+        segment.meeting_id,
+        segment.channel.as_str(),
+        crate::utils::redact_text(&segment.text)
+    );
+    let _ = app.emit(SEGMENT_EVENT, segment);
 }
 
 fn save_live_segment(app: &AppHandle, s: &LiveSegment) -> anyhow::Result<()> {
