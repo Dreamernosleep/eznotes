@@ -206,6 +206,18 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     );
     let history_manager =
         Arc::new(HistoryManager::new(app_handle).expect("Failed to initialize history manager"));
+    let speaker_manager = Arc::new(managers::speakers::SpeakerManager::new(
+        app_handle,
+        model_manager.clone(),
+    ));
+    let meeting_manager = Arc::new(
+        managers::meeting::MeetingManager::new(
+            app_handle,
+            history_manager.clone(),
+            recording_manager.clone(),
+        )
+        .expect("Failed to initialize meeting manager"),
+    );
 
     // Apply accelerator preferences before any model loads
     managers::transcription::apply_accelerator_settings(app_handle);
@@ -215,7 +227,12 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(model_manager.clone());
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
+    app_handle.manage(speaker_manager);
+    app_handle.manage(meeting_manager.clone());
     app_handle.manage(tray::TrayState::new());
+
+    // Finish meetings a crash or forced quit left mid-recording.
+    std::thread::spawn(move || meeting_manager.recover_interrupted());
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
@@ -299,6 +316,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
             }
             "copy_last_transcript" => {
                 tray::copy_last_transcript(app);
+            }
+            "toggle_meeting" => {
+                managers::meeting::toggle_meeting(app);
             }
             "unload_model" => {
                 let transcription_manager = app.state::<Arc<TranscriptionManager>>();
@@ -874,6 +894,9 @@ pub fn run(cli_args: CliArgs) {
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,
             commands::transcription::unload_model_manually,
+            commands::meetings::start_meeting_recording,
+            commands::meetings::stop_meeting_recording,
+            commands::meetings::get_meeting_status,
             commands::history::get_history_entries,
             commands::history::toggle_history_entry_saved,
             commands::history::get_audio_file_path,
@@ -973,6 +996,8 @@ pub fn run(cli_args: CliArgs) {
                 signal_handle::send_transcription_input(app, "transcribe_with_post_process", "CLI");
             } else if args.iter().any(|a| a == "--cancel") {
                 crate::utils::cancel_current_operation(app);
+            } else if args.iter().any(|a| a == "--toggle-meeting") {
+                managers::meeting::toggle_meeting(app);
             } else {
                 // A second process was launched without remote-control flags
                 // (e.g. the binary run from a shell). On macOS, relaunching the

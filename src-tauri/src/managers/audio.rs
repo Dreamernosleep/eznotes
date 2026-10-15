@@ -554,6 +554,16 @@ impl AudioRecordingManager {
         *self.cached_device.lock().unwrap() = None;
     }
 
+    /// The microphone a meeting recording should open, as `(device id,
+    /// channel)`: the same choice as dictation (selected, clamshell or system
+    /// default). The meeting opens its own stream on it, so dictation keeps
+    /// working during a meeting.
+    pub fn meeting_microphone(&self) -> (Option<String>, Option<u16>) {
+        let settings = get_settings(&self.app_handle);
+        let device = self.resolve_microphone_device(&settings).device;
+        (device, *self.selected_channel.lock().unwrap())
+    }
+
     fn resolve_microphone_device(&self, settings: &AppSettings) -> MicrophoneResolution {
         let desired = self.desired_microphone(settings);
         let (device_name, selected_microphone) = match desired {

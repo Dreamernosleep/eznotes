@@ -1,5 +1,7 @@
 {
   "tray": {
+    "startMeeting": "Démarrer l'enregistrement de réunion",
+    "stopMeeting": "Arrêter l'enregistrement de réunion",
     "settings": "Paramètres...",
     "checkUpdates": "Rechercher des mises à jour...",
     "copyLastTranscript": "Copier la dernière transcription",

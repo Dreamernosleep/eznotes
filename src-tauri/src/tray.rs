@@ -21,6 +21,7 @@
 //! icon/menu/tooltip, so those must only ever be set through the applier.
 
 use crate::managers::history::{HistoryEntry, HistoryManager};
+use crate::managers::meeting::MeetingManager;
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings;
@@ -63,6 +64,8 @@ struct MenuInputs {
     downloaded_models: Vec<(String, String)>,
     locale: String,
     update_checks_enabled: bool,
+    /// A meeting is being recorded (menu shows "Stop", icon shows recording).
+    meeting_recording: bool,
 }
 
 /// Complete description of what the tray should look like.
@@ -324,8 +327,18 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
         .collect();
     downloaded_models.sort_by(|a, b| a.1.cmp(&b.1));
 
+    let meeting_recording = app
+        .try_state::<Arc<MeetingManager>>()
+        .is_some_and(|m| m.is_recording());
+    // While a meeting records, an otherwise idle tray shows the recording icon.
+    let shown_state = if meeting_recording && icon_state == TrayIconState::Idle {
+        TrayIconState::Recording
+    } else {
+        icon_state
+    };
+
     TrayDesired {
-        icon_path: get_icon_path(theme, icon_state, warning),
+        icon_path: get_icon_path(theme, shown_state, warning),
         menu: MenuInputs {
             busy: icon_state.is_busy(),
             warning,
@@ -334,6 +347,7 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
             downloaded_models,
             locale: settings.app_language,
             update_checks_enabled: settings.update_checks_enabled,
+            meeting_recording,
         },
     }
 }
@@ -582,6 +596,19 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
         menu.remove(&check_updates_i)?;
     }
 
+    // Meeting recording toggle, right below the version line. Locales that
+    // haven't translated it yet fall back to English.
+    let english = get_tray_translations(Some("en".to_string()));
+    let meeting_label = match (inputs.meeting_recording, &strings) {
+        (true, s) if !s.stop_meeting.is_empty() => s.stop_meeting.clone(),
+        (true, _) => english.stop_meeting,
+        (false, s) if !s.start_meeting.is_empty() => s.start_meeting.clone(),
+        (false, _) => english.start_meeting,
+    };
+    let meeting_i = MenuItem::with_id(app, "toggle_meeting", &meeting_label, true, None::<&str>)?;
+    menu.insert(&meeting_i, 2)?;
+    menu.insert(&separator()?, 3)?;
+
     // Both layouts start with [version, separator, ...]; slot the warning in
     // right below the version line so it's the first actionable thing seen.
     let mut tooltip = version_label;
@@ -694,6 +721,7 @@ mod tests {
             downloaded_models: vec![("small".to_string(), "Small".to_string())],
             locale: "en".to_string(),
             update_checks_enabled: true,
+            meeting_recording: false,
         }
     }
 

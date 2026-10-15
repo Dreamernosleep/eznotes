@@ -461,6 +461,9 @@ pub struct AppSettings {
     pub history_limit: usize,
     #[serde(default = "default_recording_retention_period")]
     pub recording_retention_period: RecordingRetentionPeriod,
+    /// A meeting recording stops by itself after this many minutes.
+    #[serde(default = "default_meeting_max_minutes")]
+    pub meeting_max_minutes: u32,
     #[serde(default)]
     pub paste_method: PasteMethod,
     #[serde(default)]
@@ -651,6 +654,10 @@ fn default_history_limit() -> usize {
 
 fn default_recording_retention_period() -> RecordingRetentionPeriod {
     RecordingRetentionPeriod::PreserveLimit
+}
+
+fn default_meeting_max_minutes() -> u32 {
+    120
 }
 
 fn default_audio_feedback_volume() -> f32 {
@@ -993,6 +1000,7 @@ pub fn get_default_settings() -> AppSettings {
         word_correction_threshold: default_word_correction_threshold(),
         history_limit: default_history_limit(),
         recording_retention_period: default_recording_retention_period(),
+        meeting_max_minutes: default_meeting_max_minutes(),
         paste_method: PasteMethod::default(),
         clipboard_handling: ClipboardHandling::default(),
         auto_submit: default_auto_submit(),

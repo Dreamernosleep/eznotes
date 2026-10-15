@@ -1,5 +1,7 @@
 {
   "tray": {
+    "startMeeting": "Start Meeting Recording",
+    "stopMeeting": "Stop Meeting Recording",
     "settings": "Settings...",
     "checkUpdates": "Check for Updates...",
     "copyLastTranscript": "Copy Last Transcript",

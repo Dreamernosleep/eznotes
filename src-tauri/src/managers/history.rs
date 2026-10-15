@@ -31,6 +31,48 @@ static MIGRATIONS: &[M] = &[
     M::up("ALTER TABLE transcription_history ADD COLUMN post_processed_text TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_prompt TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_requested BOOLEAN NOT NULL DEFAULT 0;"),
+    // Meeting notes. `folder` holds the meeting's audio files, relative to the
+    // app data dir. `status`: recording | processing | complete | failed.
+    M::up(
+        "CREATE TABLE IF NOT EXISTS meetings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            source_app TEXT,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            notes_md TEXT NOT NULL DEFAULT '',
+            folder TEXT NOT NULL,
+            error TEXT
+        );",
+    ),
+    // Transcript text by channel (mic = you, system = others). `kind` is
+    // `live` (during the call) or `final` (after processing).
+    M::up(
+        "CREATE TABLE IF NOT EXISTS meeting_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            speaker_key TEXT NOT NULL,
+            t0_ms INTEGER NOT NULL,
+            t1_ms INTEGER NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_meeting_segments_meeting
+            ON meeting_segments(meeting_id, kind, t0_ms);",
+    ),
+    // Display names per speaker; `source`: auto | screen | manual.
+    M::up(
+        "CREATE TABLE IF NOT EXISTS meeting_speakers (
+            meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            speaker_key TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            source TEXT NOT NULL,
+            PRIMARY KEY (meeting_id, speaker_key)
+        );",
+    ),
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
@@ -192,8 +234,12 @@ impl HistoryManager {
         Ok(())
     }
 
-    fn get_connection(&self) -> Result<Connection> {
-        Ok(Connection::open(&self.db_path)?)
+    /// A connection to the shared app database (dictation history and
+    /// meetings live in the same file, under one migration list).
+    pub(crate) fn get_connection(&self) -> Result<Connection> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.pragma_update(None, "foreign_keys", true)?;
+        Ok(conn)
     }
 
     fn map_history_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
