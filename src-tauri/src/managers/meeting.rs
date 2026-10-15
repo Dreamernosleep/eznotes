@@ -52,8 +52,8 @@ const SILENCE_STOP: Duration = Duration::from_secs(10 * 60);
 /// Warn this long before the maximum length is reached.
 const MAX_LENGTH_WARNING: Duration = Duration::from_secs(2 * 60);
 const WATCHDOG_TICK: Duration = Duration::from_secs(1);
-/// How often the meeting window is read for who is speaking.
-const SCREEN_POLL: Duration = Duration::from_secs(1);
+/// How often the meeting window is read for participants.
+const PARTICIPANT_POLL: Duration = Duration::from_secs(5);
 const SILERO_THRESHOLD: f32 = 0.3;
 const EARSHOT_THRESHOLD: f32 = 0.5;
 
@@ -202,7 +202,7 @@ struct ActiveMeeting {
     watchdog_stop: Arc<AtomicBool>,
     /// Live transcription; ends once both channel writers are finished.
     live: JoinHandle<()>,
-    /// Stops the meeting-window reader (speaker names), if one runs.
+    /// Stops the meeting-window reader (participant names), if one runs.
     screen_stop: Arc<AtomicBool>,
 }
 
@@ -332,7 +332,6 @@ impl MeetingManager {
             last_speech: AtomicU64::new(0),
         });
 
-        let activity_for_screen = activity.clone();
         let (live_tx, live_rx) = mpsc::channel();
         let live = spawn_transcriber(self.app_handle.clone(), id, live_rx);
 
@@ -403,41 +402,33 @@ impl MeetingManager {
             system,
             watchdog_stop: Arc::new(AtomicBool::new(false)),
             live,
-            screen_stop: self.spawn_screen_reader(id, app_pid, activity_for_screen),
+            screen_stop: self.spawn_participant_reader(id, app_pid),
         })
     }
 
-    /// While a meeting from a known app records, read its window every second
-    /// for who it shows as speaking. One name at a time is a clear signal;
-    /// several (or none) is skipped.
-    fn spawn_screen_reader(
-        &self,
-        id: i64,
-        app_pid: Option<u32>,
-        activity: Arc<Activity>,
-    ) -> Arc<AtomicBool> {
+    /// While a meeting from a known app records, collect the participants'
+    /// names from its window (offered when naming speakers).
+    fn spawn_participant_reader(&self, id: i64, app_pid: Option<u32>) -> Arc<AtomicBool> {
         let stop = Arc::new(AtomicBool::new(false));
         #[cfg(windows)]
-        if let Some(pid) = app_pid.filter(|_| get_settings(&self.app_handle).meeting_screen_names) {
+        if let Some(pid) = app_pid {
             let stop = stop.clone();
             let history = self.history.clone();
             thread::spawn(move || {
                 while !stop.load(Ordering::Acquire) {
-                    let names = crate::managers::meeting_screen::speaking_names(pid);
-                    if let [name] = names.as_slice() {
-                        let t_ms = activity.started.elapsed().as_millis() as i64;
-                        if let Ok(conn) = history.get_connection() {
-                            let _ = crate::managers::meeting_names::save_highlight(
-                                &conn, id, t_ms, name,
-                            );
+                    let names = crate::managers::meeting_screen::participant_names(pid);
+                    if let Ok(conn) = history.get_connection() {
+                        for name in names {
+                            let _ =
+                                crate::managers::meeting_names::save_participant(&conn, id, &name);
                         }
                     }
-                    thread::sleep(SCREEN_POLL);
+                    thread::sleep(PARTICIPANT_POLL);
                 }
             });
         }
         #[cfg(not(windows))]
-        let _ = (id, app_pid, activity);
+        let _ = (id, app_pid);
         stop
     }
 

@@ -738,10 +738,7 @@
         "description": "Apps you chose \"Never\" for. Remove one to be asked again.",
         "remove": "Ask again for this app"
       },
-      "screenNames": {
-        "label": "Speaker Names From the Meeting App",
-        "description": "While a detected meeting records, read who the meeting app shows as speaking to name the voices."
-      }
+      "participants": "In the call"
     }
   },
   "footer": {

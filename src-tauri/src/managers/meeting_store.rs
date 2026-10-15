@@ -47,6 +47,8 @@ pub struct MeetingDetail {
     pub transcript_kind: String,
     pub segments: Vec<MeetingSegment>,
     pub speakers: Vec<MeetingSpeaker>,
+    /// People seen in the meeting app, offered when naming a speaker.
+    pub participants: Vec<String>,
 }
 
 fn speaker_order(key: &str) -> (u8, String) {
@@ -145,6 +147,7 @@ pub fn detail(conn: &Connection, id: i64) -> Result<MeetingDetail> {
         transcript_kind: kind.to_string(),
         segments,
         speakers: speakers(conn, id)?,
+        participants: crate::managers::meeting_names::participants(conn, id).unwrap_or_default(),
     })
 }
 

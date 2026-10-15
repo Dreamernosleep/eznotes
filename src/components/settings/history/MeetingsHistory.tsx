@@ -335,11 +335,12 @@ const MeetingPage: React.FC<{
     load();
   };
 
-  const saveSpeaker = async () => {
+  const saveSpeaker = async (name: string = speakerName) => {
     const key = renaming;
     setRenaming(null);
-    if (!key || !speakerName.trim()) return;
-    const result = await commands.renameMeetingSpeaker(id, key, speakerName);
+    const current = meeting?.speakers.find((s) => s.key === key)?.name;
+    if (!key || !name.trim() || name.trim() === current) return;
+    const result = await commands.renameMeetingSpeaker(id, key, name);
     if (result.status === "error") toast.error(String(result.error));
     load();
   };
@@ -511,15 +512,35 @@ const MeetingPage: React.FC<{
           <div className="px-1 flex flex-wrap gap-2">
             {meeting.speakers.map((s) =>
               renaming === s.key ? (
-                <Input
+                <div
                   key={s.key}
-                  autoFocus
-                  value={speakerName}
-                  onChange={(e) => setSpeakerName(e.target.value)}
-                  onBlur={saveSpeaker}
-                  onKeyDown={(e) => e.key === "Enter" && saveSpeaker()}
-                  className="w-36"
-                />
+                  className="flex flex-wrap items-center gap-1.5"
+                >
+                  <Input
+                    autoFocus
+                    value={speakerName}
+                    onChange={(e) => setSpeakerName(e.target.value)}
+                    onBlur={() => saveSpeaker()}
+                    onKeyDown={(e) => e.key === "Enter" && saveSpeaker()}
+                    className="w-36"
+                  />
+                  {meeting.participants.length > 0 && (
+                    <span className="text-xs text-text/50">
+                      {t("settings.meetings.participants")}:
+                    </span>
+                  )}
+                  {meeting.participants.map((name) => (
+                    <button
+                      key={name}
+                      // Keep the input focused so its blur doesn't save first.
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => saveSpeaker(name)}
+                      className="px-2 py-0.5 rounded-full bg-mid-gray/15 text-xs hover:bg-logo-primary/20 cursor-pointer"
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
               ) : (
                 <button
                   key={s.key}

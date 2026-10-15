@@ -74,11 +74,6 @@ pub struct CliArgs {
     /// Download the speaker (diarization) model and exit.
     #[arg(long)]
     pub download_diarizer: bool,
-
-    /// Print the accessibility tree of process PID's windows (to calibrate
-    /// meeting speaker names) and exit. Windows only.
-    #[arg(long, value_name = "PID")]
-    pub dump_meeting_ui: Option<u32>,
 }
 
 impl CliArgs {
@@ -89,6 +84,5 @@ impl CliArgs {
             || self.list_models
             || self.diarize.is_some()
             || self.download_diarizer
-            || self.dump_meeting_ui.is_some()
     }
 }

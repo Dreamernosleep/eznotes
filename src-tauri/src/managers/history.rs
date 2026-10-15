@@ -81,6 +81,16 @@ static MIGRATIONS: &[M] = &[
             name TEXT NOT NULL
         );",
     ),
+    // Meeting apps don't expose who is talking, so highlights are gone; the
+    // participants' names (offered when naming speakers) replace them.
+    M::up(
+        "DROP TABLE IF EXISTS meeting_highlights;
+        CREATE TABLE IF NOT EXISTS meeting_participants (
+            meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            PRIMARY KEY (meeting_id, name)
+        );",
+    ),
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]

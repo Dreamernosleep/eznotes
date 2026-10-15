@@ -485,26 +485,6 @@ fn read_cli_wav(wav: &std::path::Path) -> Result<Vec<f32>, i32> {
     })
 }
 
-/// Headless `--dump-meeting-ui <PID>`: print the meeting app's accessibility
-/// tree (control type and name), to calibrate the speaker patterns against a
-/// real meeting.
-#[cfg(windows)]
-fn dump_meeting_ui(pid: u32) -> i32 {
-    match crate::managers::meeting_screen::element_names(pid) {
-        Ok(elements) => {
-            for (kind, name) in &elements {
-                println!("{kind}\t{}", name.replace('\n', " "));
-            }
-            eprintln!("{} named elements", elements.len());
-            0
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            1
-        }
-    }
-}
-
 /// Headless `--download-diarizer` / `--diarize <WAV>`: speaker turns from the
 /// speaker model, text (with timestamps) from the transcription model, joined
 /// into a speaker-labelled transcript. Same exit codes as
@@ -941,7 +921,6 @@ pub fn run(cli_args: CliArgs) {
             commands::meetings::change_meeting_audio_retention_days_setting,
             commands::meetings::change_meeting_auto_detect_setting,
             commands::meetings::change_meeting_ignored_apps_setting,
-            commands::meetings::change_meeting_screen_names_setting,
             commands::meetings::meeting_prompt_current,
             commands::meetings::meeting_prompt_record,
             commands::meetings::meeting_prompt_dismiss,
@@ -1117,10 +1096,6 @@ pub fn run(cli_args: CliArgs) {
                 let args = cli_args.clone();
                 std::thread::spawn(move || {
                     let code = run_headless_guarded(|| {
-                        #[cfg(windows)]
-                        if let Some(pid) = args.dump_meeting_ui {
-                            return dump_meeting_ui(pid);
-                        }
                         if args.diarize.is_some() || args.download_diarizer {
                             run_headless_diarization(&handle, &args)
                         } else {

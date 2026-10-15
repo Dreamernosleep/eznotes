@@ -738,10 +738,7 @@
         "description": "Les applications pour lesquelles vous avez choisi « Jamais ». Retirez-en une pour être de nouveau sollicité.",
         "remove": "Proposer de nouveau pour cette application"
       },
-      "screenNames": {
-        "label": "Noms des intervenants depuis l'application",
-        "description": "Pendant l'enregistrement d'une réunion détectée, lire qui l'application affiche comme intervenant pour nommer les voix."
-      }
+      "participants": "Dans l'appel"
     }
   },
   "footer": {

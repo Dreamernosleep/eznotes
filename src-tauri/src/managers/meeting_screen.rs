@@ -1,7 +1,5 @@
 //! Reading the meeting app's window through Windows UI Automation (the
-//! accessibility tree screen readers use), for the name of whoever it shows
-//! as speaking. Also dumps the tree, to calibrate the speaker patterns
-//! against a real meeting (`--dump-meeting-ui <pid>`).
+//! accessibility tree screen readers use), for the participants' names.
 
 #[cfg(windows)]
 mod imp {
@@ -72,15 +70,35 @@ mod imp {
 #[cfg(windows)]
 pub use imp::element_names;
 
-/// Names the app currently shows as speaking.
+/// Participants named in the app's window right now.
 #[cfg(windows)]
-pub fn speaking_names(pid: u32) -> Vec<String> {
+pub fn participant_names(pid: u32) -> Vec<String> {
     let mut names: Vec<String> = element_names(pid)
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|(_, label)| crate::managers::meeting_names::speaker_from_label(&label))
+        .filter_map(|(_, label)| crate::managers::meeting_names::participant_from_label(&label))
         .collect();
     names.sort();
     names.dedup();
     names
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    /// Manual check against a live call: `EZNOTES_MEETING_PID=<pid> cargo
+    /// test participants_from_live_meeting -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn participants_from_live_meeting() {
+        let pid: u32 = std::env::var("EZNOTES_MEETING_PID")
+            .expect("set EZNOTES_MEETING_PID")
+            .parse()
+            .unwrap();
+        // The first read wakes up the browser's accessibility tree.
+        let _ = super::participant_names(pid);
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let names = super::participant_names(pid);
+        println!("participants: {names:?}");
+        assert!(!names.is_empty());
+    }
 }
