@@ -37,7 +37,7 @@ def acc_from_wer(wer):
     return None if wer is None else round(100 * math.exp(-wer / ACC_SCALE))
 
 # ───────────────────────── curation (CJ owns; editorial, not derivable) ──────
-# slug -> {rank?, rec?, desc?, use_case?, default_quant?, hidden?}.  All optional.
+# slug -> {rank?, rec?, desc?, use_case?, default_quant?, hidden?, role?}.  All optional.
 # desc is hand-written UI copy; models without one use factual generated summaries.
 # rank = editorial sort position (broad ordering). rec = the small "Recommended"
 # badge / onboarding subset — independent of rank, so a model can rank high
@@ -56,9 +56,9 @@ CURATION = {
     "Fun-ASR-MLT-Nano-2512":           {"rank": 10, "desc": "A tiny multilingual model"},
     # description-only (unranked, not recommended) — carried over from the legacy .bin entry
     "Breeze-ASR-25":                   {"desc": "Optimized for Taiwanese Mandarin. Code-switching support."},
-    # Sortformer emits speaker segments only; Handy's catalog is for models
-    # that produce transcription text.
-    "diar_streaming_sortformer_4spk-v2.1": {"hidden": True},
+    # Sortformer emits speaker segments only. It is kept with a `role` so the app
+    # can download it for meetings while leaving it out of the dictation list.
+    "diar_streaming_sortformer_4spk-v2.1": {"role": "diarization", "desc": "Speaker diarization (who spoke when), up to 4 speakers."},
 }
 # temporary capability corrections pending a card re-push (remove once cards fixed)
 OVERRIDES = {
@@ -234,7 +234,7 @@ def build(repo):
                      or have("Q5_K_M")
                      or (files[0]["quant"] if files else None))
 
-    return {
+    entry = {
         "id": repo,
         # Pinned commit: downloads fetch `resolve/{revision}/{file}` so the bytes
         # provably match the hashes below even if the repo moves on. Identity
@@ -258,6 +258,11 @@ def build(repo):
         "recommended": bool(cur.get("rec")),         # small badge/onboarding subset
         "recommended_rank": cur.get("rank"),          # editorial sort position (independent)
     }
+    # Non-transcription models (e.g. diarization) carry a role; the app keeps
+    # them out of the dictation model list.
+    if cur.get("role"):
+        entry["role"] = cur["role"]
+    return entry
 
 def main():
     repos = [m.id for m in api.list_models(author=ORG, limit=500)]

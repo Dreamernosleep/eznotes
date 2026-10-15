@@ -612,24 +612,7 @@ impl TranscriptionManager {
                 // reload takes effect here). The worker resolves the selector
                 // to a device handle, and rejects an index that isn't a
                 // loadable device (a host without GPU access lists none).
-                let (backend, device) = match device_index {
-                    Some(index) => (Backend::Auto, DeviceSelector::Index(index)),
-                    None => {
-                        let settings = get_settings(&self.app_handle);
-                        let accelerator = settings.transcribe_accelerator;
-                        match resolve_gpu_device(
-                            accelerator,
-                            settings.transcribe_gpu_device.as_deref(),
-                        ) {
-                            // Backend::Auto accepts an exact GPU device.
-                            Some(key) => (Backend::Auto, DeviceSelector::Key(key)),
-                            // Without a valid exact device, backend selection
-                            // handles the retired generic GPU state and host
-                            // CPU guard.
-                            None => (select_transcribe_backend(accelerator), DeviceSelector::Auto),
-                        }
-                    }
-                };
+                let (backend, device) = transcribe_load_target(&self.app_handle, device_index);
                 let requested_device = format!("{:?}", device);
                 let info = self
                     .engine
@@ -1126,6 +1109,14 @@ impl TranscriptionManager {
     }
 
     pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+        self.transcribe_detailed(audio).map(|t| t.text)
+    }
+
+    /// Like [`Self::transcribe`], but also returns the model's timed segments
+    /// (empty for engines or models without timestamps). Meetings use these to
+    /// line the text up with speaker turns. Each segment gets the same text
+    /// post-processing as the full text.
+    pub fn transcribe_detailed(&self, audio: Vec<f32>) -> Result<DetailedTranscription> {
         #[cfg(debug_assertions)]
         if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
             return Err(anyhow::anyhow!(
@@ -1144,7 +1135,7 @@ impl TranscriptionManager {
         if audio.is_empty() {
             debug!("Empty audio vector");
             self.maybe_unload_immediately("empty audio");
-            return Ok(String::new());
+            return Ok(DetailedTranscription::default());
         }
 
         // Check if model is loaded, if not try to load it
@@ -1216,6 +1207,26 @@ impl TranscriptionManager {
             &output_language,
             &run.languages,
         );
+        // Sentence-like segments get the same clean-up as the full text. Single
+        // words are passed through: fuzzy custom-word matching works on word
+        // groups, so it can't run one word at a time.
+        let segments = if run.segments_are_words {
+            run.segments
+        } else {
+            run.segments
+                .into_iter()
+                .filter_map(|segment| {
+                    let text = post_process_transcription_text(
+                        segment.text,
+                        &settings,
+                        run.model_is_whisper,
+                        &output_language,
+                        &run.languages,
+                    );
+                    (!text.trim().is_empty()).then_some(TimedText { text, ..segment })
+                })
+                .collect()
+        };
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {
@@ -1247,7 +1258,10 @@ impl TranscriptionManager {
 
         self.maybe_unload_immediately("transcription");
 
-        Ok(final_result)
+        Ok(DetailedTranscription {
+            text: final_result,
+            segments,
+        })
     }
 
     /// transcribe-cpp: the model runs in the engine's worker process, which
@@ -1330,8 +1344,37 @@ impl TranscriptionManager {
                 ));
             }
         };
+        // Prefer word timing: streaming models (e.g. Nemotron) return a whole
+        // clip as one segment, which is too coarse to split between speakers.
+        let timed_words: Vec<TimedText> = transcript
+            .words
+            .into_iter()
+            .filter(|w| w.t1_ms > w.t0_ms && !w.text.trim().is_empty())
+            .map(|w| TimedText {
+                t0_ms: w.t0_ms,
+                t1_ms: w.t1_ms,
+                text: w.text,
+            })
+            .collect();
+        let segments_are_words = !timed_words.is_empty();
+        let segments = if segments_are_words {
+            timed_words
+        } else {
+            transcript
+                .segments
+                .into_iter()
+                .filter(|s| s.t1_ms > s.t0_ms)
+                .map(|s| TimedText {
+                    t0_ms: s.t0_ms,
+                    t1_ms: s.t1_ms,
+                    text: s.text,
+                })
+                .collect()
+        };
         Ok(RunOutcome {
             text: transcript.text,
+            segments,
+            segments_are_words,
             languages,
             applied_language_hint,
             output_was_translated,
@@ -1499,6 +1542,9 @@ impl TranscriptionManager {
         };
         Ok(RunOutcome {
             text,
+            // The ONNX engines here return text only.
+            segments: Vec::new(),
+            segments_are_words: false,
             languages,
             applied_language_hint,
             output_was_translated,
@@ -1508,10 +1554,29 @@ impl TranscriptionManager {
     }
 }
 
+/// A stretch of transcribed text with its position in the audio, in ms.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TimedText {
+    pub t0_ms: i64,
+    pub t1_ms: i64,
+    pub text: String,
+}
+
+/// Result of [`TranscriptionManager::transcribe_detailed`].
+#[derive(Debug, Clone, Default)]
+pub struct DetailedTranscription {
+    pub text: String,
+    pub segments: Vec<TimedText>,
+}
+
 /// What a batch transcription produced, plus what post-processing needs to
 /// know about how it was produced.
 struct RunOutcome {
     text: String,
+    /// Timed segments, when the engine and model produce them.
+    segments: Vec<TimedText>,
+    /// Whether `segments` are single words (word-level timestamps).
+    segments_are_words: bool,
     /// The model's supported languages.
     languages: Vec<String>,
     applied_language_hint: Option<String>,
@@ -2000,6 +2065,29 @@ pub fn describe_compute_devices(tm: &TranscriptionManager) -> Result<Vec<String>
 /// exact device; without a valid exact device it has the retired generic GPU
 /// state's new Auto semantics. An emulated x64 process on Windows ARM64 forces
 /// strict CPU for every setting.
+/// Backend and device for loading a transcribe-cpp model: an explicit
+/// `device_index` (the --device-index flag) hard-selects that device;
+/// otherwise the persisted accelerator preference decides.
+pub(crate) fn transcribe_load_target(
+    app_handle: &AppHandle,
+    device_index: Option<usize>,
+) -> (Backend, DeviceSelector) {
+    match device_index {
+        Some(index) => (Backend::Auto, DeviceSelector::Index(index)),
+        None => {
+            let settings = get_settings(app_handle);
+            let accelerator = settings.transcribe_accelerator;
+            match resolve_gpu_device(accelerator, settings.transcribe_gpu_device.as_deref()) {
+                // Backend::Auto accepts an exact GPU device.
+                Some(key) => (Backend::Auto, DeviceSelector::Key(key)),
+                // Without a valid exact device, backend selection handles the
+                // retired generic GPU state and host CPU guard.
+                None => (select_transcribe_backend(accelerator), DeviceSelector::Auto),
+            }
+        }
+    }
+}
+
 fn select_transcribe_backend(setting: TranscribeAcceleratorSetting) -> Backend {
     select_transcribe_backend_for_host(setting, transcribe_gpu_disabled_for_host())
 }
@@ -2063,7 +2151,7 @@ pub struct GpuDeviceOption {
     pub total_vram_mb: usize,
 }
 
-fn transcribe_gpu_disabled_for_host() -> bool {
+pub(crate) fn transcribe_gpu_disabled_for_host() -> bool {
     crate::utils::is_windows_x64_emulated_on_arm64()
 }
 

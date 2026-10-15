@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use transcribe_cpp::{
-    Backend, Capabilities, DeviceType, RunOptions, StreamOptions, StreamText, StreamUpdate,
-    Transcript,
+    Backend, Capabilities, DeviceType, DiarizeOptions, RunOptions, SpeakerSegment, StreamOptions,
+    StreamText, StreamUpdate, Transcript,
 };
 
 /// Refuse frames larger than this: a garbage length must not turn into a
@@ -50,6 +50,11 @@ pub enum Request {
         want_language: bool,
     },
     StreamReset,
+    /// Followed by the PCM to diarize. Only valid when a diarization model
+    /// (e.g. Sortformer) is loaded.
+    Diarize {
+        options: DiarizeOptions,
+    },
 }
 
 /// How the worker should pick the device for a [`Request::Load`]. Device
@@ -83,6 +88,8 @@ pub enum Response {
         text: StreamText,
         language: Option<String>,
     },
+    /// Speaker turns from [`Request::Diarize`], ordered by start time.
+    Speakers(Vec<SpeakerSegment>),
     Ok,
     Error(String),
 }

@@ -1718,6 +1718,11 @@ impl ModelManager {
             } else {
                 CapabilityProbe::default()
             };
+            // A diarizer (e.g. Sortformer from the mirror fallback) loads but
+            // can't transcribe: never offer it as a dictation model.
+            if probe.is_non_transcription() {
+                continue;
+            }
             let caps = local_caps(&probe);
             let display_name = probed_display_name(&probe).unwrap_or(fallback_display_name);
 
@@ -1855,8 +1860,8 @@ impl ModelManager {
 
                 let path = snapshot.join(&fname);
                 let probe = prober.probe_file(&path);
-                // Only surface models transcribe-cpp recognises.
-                if probe.verdict != Compatibility::Compatible {
+                // Only surface transcription models transcribe-cpp recognises.
+                if probe.verdict != Compatibility::Compatible || probe.is_non_transcription() {
                     continue;
                 }
                 let caps = local_caps(&probe);
@@ -2660,6 +2665,48 @@ impl ModelManager {
         }
     }
 
+    /// The speaker-diarization model as a registry-shaped [`ModelInfo`]. It is
+    /// deliberately never inserted into `available_models`, so it can't be
+    /// listed, selected or auto-selected as a dictation model.
+    fn diarizer_info() -> Result<(ModelInfo, String, String)> {
+        let desc = crate::catalog::diarizer()
+            .ok_or_else(|| anyhow::anyhow!("No diarization model in the catalog"))?;
+        let info = desc.to_model_info(&DiskStatus::default());
+        match &info.source {
+            ModelSource::HuggingFace { repo_id, revision } => {
+                let (repo_id, revision) = (repo_id.clone(), revision.clone());
+                Ok((info, repo_id, revision))
+            }
+            _ => Err(anyhow::anyhow!(
+                "Diarization model must come from Hugging Face"
+            )),
+        }
+    }
+
+    /// Path of the downloaded diarization model, or `None` if it isn't on disk.
+    /// Looks in the same two places as [`Self::get_model_path`]: the shared HF
+    /// cache and the models dir (mirror fallback / manual drop-in).
+    pub fn diarizer_path(&self) -> Option<PathBuf> {
+        let (info, repo_id, revision) = Self::diarizer_info().ok()?;
+        hf_cached_path(&repo_id, &revision, &info.filename).or_else(|| {
+            let local = self.models_dir.join(&info.filename);
+            local.exists().then_some(local)
+        })
+    }
+
+    /// Download the diarization model through the regular HF path (retries,
+    /// stall watchdog, mirror fallback, `model-download-progress` events) and
+    /// return its path. A no-op when it is already on disk.
+    pub async fn download_diarizer(&self) -> Result<PathBuf> {
+        if let Some(path) = self.diarizer_path() {
+            return Ok(path);
+        }
+        let (info, repo_id, revision) = Self::diarizer_info()?;
+        self.download_hf_model(&info, repo_id, revision).await?;
+        self.diarizer_path()
+            .ok_or_else(|| anyhow::anyhow!("Diarization model download did not complete"))
+    }
+
     pub fn cancel_download(&self, model_id: &str) -> Result<()> {
         debug!("ModelManager: cancel_download called for: {}", model_id);
 
@@ -3142,8 +3189,27 @@ mod tests {
             &[],
         );
 
+        // Diarizer (sortformer) gguf -> loads, but is not a dictation model.
+        let repo3 = root.join("models--handy-computer--sortformer-test");
+        fs::create_dir_all(repo3.join("snapshots").join("ghi789")).unwrap();
+        fs::create_dir_all(repo3.join("refs")).unwrap();
+        fs::write(repo3.join("refs").join("main"), "ghi789").unwrap();
+        write_synthetic_gguf(
+            &repo3
+                .join("snapshots")
+                .join("ghi789")
+                .join("sortformer-q8.gguf"),
+            "sortformer",
+            &[],
+        );
+
         let mut models = HashMap::new();
         ModelManager::discover_hf_cache_models_in(root, &mut models);
+
+        assert!(
+            !models.contains_key("handy-computer/sortformer-test/sortformer-q8.gguf"),
+            "diarization gguf must not be listed as a dictation model"
+        );
 
         let id = "handy-computer/whisper-test/whisper-q8.gguf";
         let m = models.get(id).expect("whisper gguf should be discovered");

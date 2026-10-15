@@ -59,7 +59,15 @@ struct CatalogModel {
     /// from `recommended_rank`, which only orders the full list.
     #[serde(default)]
     recommended: bool,
+    /// What the model is for when it is not a transcription model, e.g.
+    /// `"diarization"`. Role models stay out of [`CATALOG`] (the dictation model
+    /// list) and are reached through their own accessor such as [`diarizer`].
+    #[serde(default)]
+    role: Option<String>,
 }
+
+/// Catalog role of the speaker-diarization model.
+const DIARIZATION_ROLE: &str = "diarization";
 
 #[derive(Deserialize)]
 struct CatalogCaps {
@@ -119,9 +127,26 @@ static ROOT: Lazy<CatalogRoot> = Lazy::new(|| {
         .expect("bundled catalog.json is valid JSON matching the catalog schema")
 });
 
-/// The bundled catalog, parsed once and normalised into descriptors.
-pub static CATALOG: Lazy<Vec<ModelDescriptor>> =
-    Lazy::new(|| ROOT.models.iter().map(ModelDescriptor::from).collect());
+/// The bundled transcription catalog, parsed once and normalised into
+/// descriptors. Role models (see [`CatalogModel::role`]) are left out so they
+/// can never be listed, picked or auto-selected as a dictation model.
+pub static CATALOG: Lazy<Vec<ModelDescriptor>> = Lazy::new(|| {
+    ROOT.models
+        .iter()
+        .filter(|m| m.role.is_none())
+        .map(ModelDescriptor::from)
+        .collect()
+});
+
+/// The speaker-diarization model (Sortformer), downloaded on demand for
+/// meetings. Its descriptor id has the same `"{repo_id}/{filename}"` shape as
+/// transcription models, so [`mirror_fallbacks`] works for it unchanged.
+pub fn diarizer() -> Option<ModelDescriptor> {
+    ROOT.models
+        .iter()
+        .find(|m| m.role.as_deref() == Some(DIARIZATION_ROLE))
+        .map(ModelDescriptor::from)
+}
 
 /// A mirror copy of a catalog model's default file, with the expected content
 /// hash for end-to-end verification. Mirrors are untrusted bit-pipes: the
@@ -232,13 +257,27 @@ mod tests {
     }
 
     #[test]
-    fn pure_diarization_models_are_not_downloadable() {
+    fn diarizers_are_not_in_the_dictation_catalog() {
         assert!(
             CATALOG
                 .iter()
                 .all(|model| model.caps.architecture.as_deref() != Some("sortformer")),
             "Sortformer produces speaker segments, not transcription text"
         );
+    }
+
+    #[test]
+    fn diarizer_is_pinned_and_hashed() {
+        let d = diarizer().expect("catalog has a diarization model");
+        assert_eq!(d.caps.architecture.as_deref(), Some("sortformer"));
+        let ModelSource::HuggingFace { revision, .. } = &d.source else {
+            panic!("diarizer should come from Hugging Face");
+        };
+        assert_ne!(revision, "main", "diarizer must be pinned to a revision");
+        let file = default_quant_file(&d.files, d.default_quant.as_deref())
+            .expect("diarizer has a default file");
+        assert_eq!(file.sha256.as_deref().map(str::len), Some(64));
+        assert!(d.id.ends_with(&file.filename));
     }
 
     #[test]

@@ -2234,6 +2234,32 @@
       "default_quant": "Q5_K_M",
       "recommended": false,
       "recommended_rank": null
+    },
+    {
+      "id": "handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf",
+      "revision": "ae4afbb5c3d33b71cf2dbf600022b655ee706dd0",
+      "role": "diarization",
+      "slug": "diar_streaming_sortformer_4spk-v2.1",
+      "name": "Sortformer 4spk v2.1",
+      "architecture": "sortformer",
+      "family": "sortformer",
+      "parameters": "117M",
+      "description": "Speaker diarization (who spoke when), up to 4 speakers.",
+      "base_model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+      "license": "other",
+      "language_count": 0,
+      "languages": [],
+      "capabilities": {"streaming": true, "translate": false, "lang_detect": false, "timestamps": "none"},
+      "speed_score": null,
+      "accuracy_score": null,
+      "files": [
+        {"filename": "diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf", "quant": "Q8_0", "size_bytes": 139310336, "sha256": "a5dacdc650790266c7a362e54e6bf51952015487edaa606c4e11632bc32442a9"},
+        {"filename": "diar_streaming_sortformer_4spk-v2.1-F16.gguf", "quant": "F16", "size_bytes": 236606560, "sha256": "62faec7b99ad23e323087597604b50728abe85089b6364970b019a845547bf99"},
+        {"filename": "diar_streaming_sortformer_4spk-v2.1-F32.gguf", "quant": "F32", "size_bytes": 470910560, "sha256": "61597ce9447539ca32ce6fefb923551ab6afbdc068223c5d19929296ad2aa380"}
+      ],
+      "default_quant": "Q8_0",
+      "recommended": false,
+      "recommended_rank": null
     }
   ]
 }

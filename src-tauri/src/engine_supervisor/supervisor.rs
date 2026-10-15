@@ -30,7 +30,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
-use transcribe_cpp::{Backend, RunOptions, StreamOptions, StreamText, StreamUpdate, Transcript};
+use transcribe_cpp::{
+    Backend, DiarizeOptions, RunOptions, SpeakerSegment, StreamOptions, StreamText, StreamUpdate,
+    Transcript,
+};
 
 /// Spawn, backend init and device listing. Listing first opens the GPU,
 /// which on macOS compiles ggml's Metal library when the system shader cache
@@ -201,6 +204,12 @@ enum Command {
     },
     StreamReset {
         id: u64,
+    },
+    Diarize {
+        pcm: Vec<f32>,
+        options: DiarizeOptions,
+        epoch: u64,
+        reply: Reply<Result<Vec<SpeakerSegment>, EngineError>>,
     },
 }
 
@@ -405,6 +414,24 @@ impl EngineSupervisor {
         self.ask(|reply| Command::Transcribe {
             pcm,
             run,
+            epoch,
+            reply,
+        })
+        .unwrap_or_else(|| Err(engine_stopped()))
+    }
+
+    /// Speaker turns ("who spoke when") for 16 kHz mono PCM, in time order.
+    /// Needs a diarization model loaded; same crash/hang retry as
+    /// [`Self::transcribe`].
+    pub fn diarize(
+        &self,
+        pcm: Vec<f32>,
+        options: DiarizeOptions,
+    ) -> Result<Vec<SpeakerSegment>, EngineError> {
+        let epoch = self.shared.epoch();
+        self.ask(|reply| Command::Diarize {
+            pcm,
+            options,
             epoch,
             reply,
         })
@@ -660,6 +687,14 @@ impl Owner {
                         self.end_stream();
                     }
                 }
+                Command::Diarize {
+                    pcm,
+                    options,
+                    epoch,
+                    reply,
+                } => {
+                    let _ = reply.send(self.diarize(&pcm, &options, epoch));
+                }
             }
         }
         // Every handle is gone.
@@ -863,11 +898,42 @@ impl Owner {
         run: &RunOptions,
         epoch: u64,
     ) -> Result<Transcript, EngineError> {
-        // A stream left open would make the worker refuse the run.
-        self.end_stream();
         let request = Request::Run {
             options: run.clone(),
         };
+        match self.run_pcm_request(&request, pcm, epoch)? {
+            Response::Transcript(transcript) => Ok(transcript),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    fn diarize(
+        &mut self,
+        pcm: &[f32],
+        options: &DiarizeOptions,
+        epoch: u64,
+    ) -> Result<Vec<SpeakerSegment>, EngineError> {
+        let request = Request::Diarize {
+            options: options.clone(),
+        };
+        match self.run_pcm_request(&request, pcm, epoch)? {
+            Response::Speakers(turns) => Ok(turns),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    /// Send a one-shot PCM request (transcription or diarization) and return
+    /// the worker's answer. An error reply is passed back as `Ok`, for the
+    /// caller to reject as unexpected.
+    fn run_pcm_request(
+        &mut self,
+        request: &Request,
+        pcm: &[f32],
+        epoch: u64,
+    ) -> Result<Response, EngineError> {
+        // A stream left open would make the worker refuse the run.
+        self.end_stream();
+        let what = request_name(request);
         let mut retried = false;
         loop {
             if self.shared.cancelled_since(epoch) {
@@ -877,17 +943,16 @@ impl Owner {
             // deadline starts only once the model is loaded.
             self.ensure_worker()?;
             let deadline = self.deadlines().run(pcm.len());
-            match self.call_work(&request, Some(pcm), deadline, epoch) {
-                Ok(Response::Transcript(transcript)) => return Ok(transcript),
-                Ok(other) => return Err(unexpected(&other).into()),
+            match self.call_work(request, Some(pcm), deadline, epoch) {
+                Ok(response) => return Ok(response),
                 Err(failure) if failure.worker_lost() => {
-                    let on_gpu = self.worker_lost("transcription", &failure);
+                    let on_gpu = self.worker_lost(what, &failure);
                     let pinned = self.spec.as_ref().is_some_and(LoadSpec::pinned);
                     let hung_on_cpu = matches!(failure, Failure::Hung(_)) && !on_gpu;
                     if retried || pinned || hung_on_cpu {
                         return Err(failure.into());
                     }
-                    warn!("Retrying the transcription in a fresh worker");
+                    warn!("Retrying the {} in a fresh worker", what);
                     retried = true;
                 }
                 Err(failure) => return Err(failure.into()),
@@ -1423,6 +1488,7 @@ fn request_name(request: &Request) -> &'static str {
         Request::Feed => "stream feed",
         Request::Finalize { .. } => "stream finalize",
         Request::StreamReset => "stream reset",
+        Request::Diarize { .. } => "diarization",
     }
 }
 

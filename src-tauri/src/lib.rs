@@ -423,6 +423,146 @@ mod headless_guard_tests {
     }
 }
 
+/// Read a WAV passed on the command line. read_wav_samples reads 16-bit int
+/// samples and does no validation; the app only ever saves 16 kHz mono 16-bit
+/// PCM, so anything else is rejected rather than transcribed as garbage. On
+/// failure the error is printed and the exit code (2) returned.
+fn read_cli_wav(wav: &std::path::Path) -> Result<Vec<f32>, i32> {
+    match hound::WavReader::open(wav) {
+        Ok(reader) => {
+            let spec = reader.spec();
+            if spec.sample_rate != 16_000
+                || spec.channels != 1
+                || spec.bits_per_sample != 16
+                || spec.sample_format != hound::SampleFormat::Int
+            {
+                eprintln!(
+                    "error: expected 16 kHz mono 16-bit PCM WAV, got {} Hz / {} ch / {}-bit {:?}",
+                    spec.sample_rate, spec.channels, spec.bits_per_sample, spec.sample_format
+                );
+                return Err(2);
+            }
+        }
+        Err(e) => {
+            eprintln!("error: cannot open {}: {}", wav.display(), e);
+            return Err(2);
+        }
+    }
+    crate::audio_toolkit::read_wav_samples(wav).map_err(|e| {
+        eprintln!("error: failed to read {}: {}", wav.display(), e);
+        2
+    })
+}
+
+/// Headless `--download-diarizer` / `--diarize <WAV>`: speaker turns from the
+/// speaker model, text (with timestamps) from the transcription model, joined
+/// into a speaker-labelled transcript. Same exit codes as
+/// [`run_headless_transcription`].
+fn run_headless_diarization(app: &AppHandle, args: &CliArgs) -> i32 {
+    use crate::managers::speakers::{label_segments, SpeakerManager};
+    use std::time::Instant;
+
+    let sm = app.state::<Arc<SpeakerManager>>();
+    let download_start = Instant::now();
+    match tauri::async_runtime::block_on(sm.ensure_model()) {
+        Ok(path) => {
+            if args.download_diarizer || download_start.elapsed().as_secs() > 1 {
+                eprintln!("speaker model: {}", path.display());
+            }
+        }
+        Err(e) => {
+            eprintln!("error: speaker model download failed: {}", e);
+            return 1;
+        }
+    }
+
+    let Some(wav) = args.diarize.clone() else {
+        return 0;
+    };
+    let samples = match read_cli_wav(&wav) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let audio_secs = samples.len() as f64 / 16_000.0;
+
+    // Speakers first: the diarizer loads, runs and unloads in its own worker
+    // before the transcription model takes the GPU.
+    let t = Instant::now();
+    let turns = match sm.diarize(samples.clone(), args.device_index) {
+        Ok(turns) => turns,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return 1;
+        }
+    };
+    let diarize_ms = t.elapsed().as_millis() as u64;
+
+    let tm = app.state::<Arc<TranscriptionManager>>();
+    let model_id = args
+        .model
+        .clone()
+        .unwrap_or_else(|| get_settings(app).selected_model);
+    if model_id.is_empty() {
+        eprintln!("error: no model selected (pass --model or pick one in the app)");
+        return 2;
+    }
+    if let Err(e) = tm.load_model_with_device(&model_id, args.device_index) {
+        eprintln!("error: load_model('{}') failed: {}", model_id, e);
+        return 1;
+    }
+    let t = Instant::now();
+    let transcription = match tm.transcribe_detailed(samples) {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("error: transcribe failed: {}", e);
+            return 1;
+        }
+    };
+    let transcribe_ms = t.elapsed().as_millis() as u64;
+    if transcription.segments.is_empty() && !transcription.text.is_empty() {
+        eprintln!(
+            "warning: model '{}' returned no timestamps; speakers can't be matched to text",
+            model_id
+        );
+    }
+    let labelled = label_segments(&transcription.segments, &turns);
+    let speakers = {
+        let mut ids: Vec<u32> = turns.iter().map(|t| t.speaker).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.len()
+    };
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "model": model_id,
+                "audio_secs": audio_secs,
+                "diarize_ms": diarize_ms,
+                "transcribe_ms": transcribe_ms,
+                "speakers": speakers,
+                "turns": turns,
+                "segments": labelled,
+            })
+        );
+    } else {
+        println!(
+            "model={} audio={:.2}s speakers={} diarize={}ms transcribe={}ms",
+            model_id, audio_secs, speakers, diarize_ms, transcribe_ms
+        );
+        for s in &labelled {
+            let secs = s.t0_ms / 1000;
+            let who = match s.speaker {
+                Some(id) => format!("Speaker {}", id),
+                None => "Unknown".to_string(),
+            };
+            println!("[{:02}:{:02}] {}: {}", secs / 60, secs % 60, who, s.text);
+        }
+    }
+    0
+}
+
 /// Headless one-shot transcription for the `--transcribe-file` / `--list-devices`
 /// path. Drives the same `TranscriptionManager::transcribe` the app uses; no
 /// mic, no VAD, no download. Returns a process exit code (0 ok, 1 runtime
@@ -499,36 +639,9 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
         return 0;
     };
 
-    // read_wav_samples reads 16-bit int samples and does no validation; the app
-    // only ever saves 16 kHz mono 16-bit PCM, so reject anything else rather than
-    // transcribe garbage / mis-time / mis-decode.
-    match hound::WavReader::open(&wav) {
-        Ok(reader) => {
-            let spec = reader.spec();
-            if spec.sample_rate != 16_000
-                || spec.channels != 1
-                || spec.bits_per_sample != 16
-                || spec.sample_format != hound::SampleFormat::Int
-            {
-                eprintln!(
-                    "error: expected 16 kHz mono 16-bit PCM WAV, got {} Hz / {} ch / {}-bit {:?}",
-                    spec.sample_rate, spec.channels, spec.bits_per_sample, spec.sample_format
-                );
-                return 2;
-            }
-        }
-        Err(e) => {
-            eprintln!("error: cannot open {}: {}", wav.display(), e);
-            return 2;
-        }
-    }
-
-    let samples = match crate::audio_toolkit::read_wav_samples(&wav) {
+    let samples = match read_cli_wav(&wav) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: failed to read {}: {}", wav.display(), e);
-            return 2;
-        }
+        Err(code) => return code,
     };
     let audio_secs = samples.len() as f64 / 16_000.0;
 
@@ -788,8 +901,7 @@ pub fn run(cli_args: CliArgs) {
 
     // The headless path must run as its own instance (see the single-instance
     // note below), not forward to an already-running app.
-    let headless_mode =
-        cli_args.transcribe_file.is_some() || cli_args.list_devices || cli_args.list_models;
+    let headless_mode = cli_args.is_headless();
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
@@ -918,14 +1030,25 @@ pub fn run(cli_args: CliArgs) {
                         .expect("Failed to initialize transcription manager"),
                 );
                 managers::transcription::report_compute_devices(&transcription_manager);
+                let speaker_manager = Arc::new(managers::speakers::SpeakerManager::new(
+                    &app_handle,
+                    model_manager.clone(),
+                ));
                 app_handle.manage(model_manager);
                 app_handle.manage(transcription_manager);
+                app_handle.manage(speaker_manager);
                 managers::transcription::apply_accelerator_settings(&app_handle);
 
                 let handle = app_handle.clone();
                 let args = cli_args.clone();
                 std::thread::spawn(move || {
-                    let code = run_headless_guarded(|| run_headless_transcription(&handle, &args));
+                    let code = run_headless_guarded(|| {
+                        if args.diarize.is_some() || args.download_diarizer {
+                            run_headless_diarization(&handle, &args)
+                        } else {
+                            run_headless_transcription(&handle, &args)
+                        }
+                    });
                     // Drop the loaded engine before exit so its transcription
                     // worker is told to shut down cleanly.
                     if let Some(tm) = handle.try_state::<Arc<TranscriptionManager>>() {

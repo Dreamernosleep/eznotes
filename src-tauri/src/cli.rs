@@ -57,7 +57,28 @@ pub struct CliArgs {
     #[arg(long, value_name = "N")]
     pub repeat: Option<usize>,
 
-    /// Emit --transcribe-file results as JSON.
+    /// Emit --transcribe-file / --diarize results as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Transcribe this WAV (16 kHz mono) with speaker labels and exit:
+    /// "who spoke when" from the speaker model, text from --model (default:
+    /// the selected model). Downloads the speaker model first if needed.
+    #[arg(long, value_name = "WAV")]
+    pub diarize: Option<PathBuf>,
+
+    /// Download the speaker (diarization) model and exit.
+    #[arg(long)]
+    pub download_diarizer: bool,
+}
+
+impl CliArgs {
+    /// Flags that run headless (no window, tray or mic) and then exit.
+    pub fn is_headless(&self) -> bool {
+        self.transcribe_file.is_some()
+            || self.list_devices
+            || self.list_models
+            || self.diarize.is_some()
+            || self.download_diarizer
+    }
 }

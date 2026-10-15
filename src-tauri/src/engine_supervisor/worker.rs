@@ -16,8 +16,16 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use transcribe_cpp::{
-    Backend, BackendMask, DeviceType, Feature, Model, ModelOptions, Session, Stream,
+    Backend, BackendMask, Capabilities, DeviceType, DiarizeSession, Feature, Model, ModelOptions,
+    Role, Session, Stream, TimestampKind,
 };
+
+/// The session for whichever kind of model is loaded: transcription, or
+/// speaker diarization (which has no transcription session at all).
+enum Held {
+    Asr(Session),
+    Diarizer(DiarizeSession),
+}
 
 /// Prefix on worker log lines so the parent can tell them apart from raw
 /// native output (e.g. a `GGML_ASSERT` message right before an abort).
@@ -79,10 +87,10 @@ pub fn run() -> i32 {
     );
 
     let mut output = protocol_out;
-    let mut session: Option<(Session, LoadedInfo)> = None;
+    let mut session: Option<(Held, LoadedInfo)> = None;
 
     while let Ok(Incoming { request, pcm }) = requests.recv() {
-        let finished_run = matches!(request, Request::Run { .. });
+        let finished_run = matches!(request, Request::Run { .. } | Request::Diarize { .. });
         let response = match request {
             Request::Hello { list_devices } => match &init_error {
                 Some(message) => Response::Error(message.clone()),
@@ -113,17 +121,35 @@ pub fn run() -> i32 {
                 }
             }
             Request::Run { options } => match session.as_mut() {
-                Some((session, info)) => {
+                Some((Held::Asr(session), info)) => {
                     inject_fault("run", info.on_gpu);
                     match session.run(&pcm, &options) {
                         Ok(transcript) => Response::Transcript(transcript),
                         Err(e) => Response::Error(e.to_string()),
                     }
                 }
+                Some((Held::Diarizer(_), _)) => wrong_model("a transcription"),
+                None => not_loaded(),
+            },
+            Request::Diarize { options } => match session.as_mut() {
+                Some((Held::Diarizer(diarizer), info)) => {
+                    inject_fault("run", info.on_gpu);
+                    match diarizer.run(&pcm, &options) {
+                        Ok(mut turns) => {
+                            // The engine groups turns by speaker; callers want
+                            // them in time order.
+                            turns.sort_by_key(|t| (t.t0_ms, t.t1_ms));
+                            Response::Speakers(turns)
+                        }
+                        Err(e) => Response::Error(e.to_string()),
+                    }
+                }
+                Some((Held::Asr(_), _)) => wrong_model("a diarization"),
                 None => not_loaded(),
             },
             Request::StreamBegin { run, stream } => match session.as_mut() {
-                Some((session, info)) => match session.stream(&run, &stream) {
+                Some((Held::Diarizer(_), _)) => wrong_model("a transcription"),
+                Some((Held::Asr(session), info)) => match session.stream(&run, &stream) {
                     Ok(stream) => {
                         if write_message(&mut output, &Response::Ok, None).is_err() {
                             return 1;
@@ -252,11 +278,15 @@ fn not_loaded() -> Response {
     Response::Error("no model loaded".to_string())
 }
 
+fn wrong_model(needed: &str) -> Response {
+    Response::Error(format!("this request needs {needed} model"))
+}
+
 fn load(
     path: &Path,
     backend: Backend,
     selector: DeviceSelector,
-) -> Result<(Session, LoadedInfo), String> {
+) -> Result<(Held, LoadedInfo), String> {
     let device = match selector {
         DeviceSelector::Auto => None,
         DeviceSelector::Key(key) => {
@@ -292,9 +322,40 @@ fn load(
     inject_fault("load", backend != Backend::Cpu);
     let model = Model::load_with(path, &ModelOptions { backend, device })
         .map_err(|e| format!("Failed to load model: {e}"))?;
-    let session = model
-        .session()
-        .map_err(|e| format!("Failed to create session: {e}"))?;
+    let roles = model.roles();
+    // A pure diarizer (Sortformer) has no transcription session or
+    // capabilities; it is driven through `Request::Diarize` instead.
+    let (held, capabilities) = if !roles.contains(Role::Asr) && roles.contains(Role::Diarize) {
+        let diarizer = model
+            .diarize_session()
+            .map_err(|e| format!("Failed to create diarize session: {e}"))?;
+        let sample_rate = model
+            .diarize_info()
+            .map_err(|e| format!("Failed to read diarizer info: {e}"))?
+            .sample_rate;
+        (
+            Held::Diarizer(diarizer),
+            Capabilities {
+                native_sample_rate: sample_rate,
+                languages: Vec::new(),
+                translate_target_languages: Vec::new(),
+                max_timestamp_kind: TimestampKind::None,
+                supports_language_detect: false,
+                supports_translate: false,
+                supports_streaming: false,
+                supports_spec_decode: false,
+                max_audio_ms: 0,
+            },
+        )
+    } else {
+        let session = model
+            .session()
+            .map_err(|e| format!("Failed to create session: {e}"))?;
+        let capabilities = model
+            .capabilities()
+            .map_err(|e| format!("Failed to read model capabilities: {e}"))?;
+        (Held::Asr(session), capabilities)
+    };
     let bound = model.device().ok().map(|d| DeviceInfo::from_device(&d));
     let backend_name = model.backend();
     let info = LoadedInfo {
@@ -309,12 +370,10 @@ fn load(
             .as_ref()
             .map(|d| d.label().to_string())
             .unwrap_or_else(|| "unknown".to_string()),
-        capabilities: model
-            .capabilities()
-            .map_err(|e| format!("Failed to read model capabilities: {e}"))?,
+        capabilities,
         supports_initial_prompt: model.supports(Feature::InitialPrompt),
     };
-    Ok((session, info))
+    Ok((held, info))
 }
 
 /// Debug-build fault injection for exercising crash/hang recovery:

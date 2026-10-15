@@ -50,6 +50,21 @@ pub const KNOWN_ARCHES: &[&str] = &[
     "sortformer",
 ];
 
+/// Architectures that load in transcribe-cpp but produce no transcription text
+/// (speaker diarization). On-disk scans skip them so they never surface as a
+/// selectable dictation model; meetings reach them through the catalog role.
+pub const NON_TRANSCRIPTION_ARCHES: &[&str] = &["sortformer"];
+
+impl CapabilityProbe {
+    /// Whether this file is a non-transcription model (see
+    /// [`NON_TRANSCRIPTION_ARCHES`]).
+    pub fn is_non_transcription(&self) -> bool {
+        self.architecture
+            .as_deref()
+            .is_some_and(|arch| NON_TRANSCRIPTION_ARCHES.contains(&arch))
+    }
+}
+
 // GGUF metadata keys transcribe-cpp writes for ASR models.
 const KEY_ARCH: &str = "general.architecture";
 const KEY_NAME: &str = "general.name";
